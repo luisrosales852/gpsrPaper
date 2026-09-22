@@ -1,0 +1,11 @@
+# Simulation-only dependencies. Deliberately NOT merged into the root
+# requirements.txt: gpsr_merger/merger.py still has no third-party deps at all,
+# and bt_builder/leaf_behaviours still need only py_trees.
+py_trees==2.2.3
+mujoco>=3.13.0
+numpy>=1.26
+pillow>=10.0
+matplotlib>=3.8      # bundled DejaVu fonts used by the HUD
+pytest>=8.0          # tests/test_sim_run.py (optional; it also runs standalone)
+# Video encoding uses the system `ffmpeg` binary (brew install ffmpeg),
+# so there is no Python video dependency.

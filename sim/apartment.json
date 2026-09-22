@@ -1,0 +1,560 @@
+{
+  "name": "open_plan_loft",
+  "comment": "Open-plan: outer walls + furniture islands only, no interior doors. Straight-line travel therefore equals the merger's Euclidean cost model (merger._euclidean), so simulated distance is directly comparable to planned cost.",
+  "bounds": [
+    [
+      -7.0,
+      -6.0
+    ],
+    [
+      7.0,
+      6.0
+    ]
+  ],
+  "wall_height": 1.2,
+  "zones": [
+    {
+      "name": "kitchen",
+      "rect": [
+        2.0,
+        1.0,
+        6.8,
+        5.8
+      ],
+      "color": [
+        0.62,
+        0.78,
+        0.63,
+        1
+      ]
+    },
+    {
+      "name": "living_room",
+      "rect": [
+        -2.2,
+        1.0,
+        1.8,
+        5.8
+      ],
+      "color": [
+        0.85,
+        0.74,
+        0.55,
+        1
+      ]
+    },
+    {
+      "name": "bedroom",
+      "rect": [
+        -6.8,
+        1.0,
+        -2.4,
+        5.8
+      ],
+      "color": [
+        0.66,
+        0.66,
+        0.84,
+        1
+      ]
+    },
+    {
+      "name": "bathroom",
+      "rect": [
+        -6.8,
+        -5.8,
+        -3.4,
+        -0.6
+      ],
+      "color": [
+        0.58,
+        0.79,
+        0.85,
+        1
+      ]
+    },
+    {
+      "name": "office",
+      "rect": [
+        -3.2,
+        -5.8,
+        1.2,
+        -0.6
+      ],
+      "color": [
+        0.84,
+        0.66,
+        0.66,
+        1
+      ]
+    },
+    {
+      "name": "garage",
+      "rect": [
+        1.6,
+        -5.8,
+        6.8,
+        -0.6
+      ],
+      "color": [
+        0.7,
+        0.7,
+        0.72,
+        1
+      ]
+    }
+  ],
+  "furniture": [
+    {
+      "name": "counter_top",
+      "rect": [
+        4.6,
+        4.0,
+        6.6,
+        5.6
+      ],
+      "h": 0.9,
+      "color": [
+        0.55,
+        0.42,
+        0.32,
+        1
+      ]
+    },
+    {
+      "name": "dishwasher_box",
+      "rect": [
+        2.2,
+        4.9,
+        3.0,
+        5.6
+      ],
+      "h": 0.85,
+      "color": [
+        0.7,
+        0.7,
+        0.74,
+        1
+      ]
+    },
+    {
+      "name": "side_table_top",
+      "rect": [
+        0.5,
+        4.4,
+        1.5,
+        5.2
+      ],
+      "h": 0.55,
+      "color": [
+        0.6,
+        0.46,
+        0.34,
+        1
+      ]
+    },
+    {
+      "name": "couch_block",
+      "rect": [
+        -2.0,
+        4.6,
+        -0.5,
+        5.5
+      ],
+      "h": 0.5,
+      "color": [
+        0.4,
+        0.45,
+        0.55,
+        1
+      ]
+    },
+    {
+      "name": "bookshelf_box",
+      "rect": [
+        -4.6,
+        4.9,
+        -3.4,
+        5.6
+      ],
+      "h": 1.1,
+      "color": [
+        0.48,
+        0.36,
+        0.26,
+        1
+      ]
+    },
+    {
+      "name": "bed_block",
+      "rect": [
+        -6.4,
+        1.6,
+        -4.6,
+        3.4
+      ],
+      "h": 0.45,
+      "color": [
+        0.72,
+        0.66,
+        0.74,
+        1
+      ]
+    },
+    {
+      "name": "desk_block",
+      "rect": [
+        -1.8,
+        -4.4,
+        -0.2,
+        -3.4
+      ],
+      "h": 0.75,
+      "color": [
+        0.5,
+        0.4,
+        0.34,
+        1
+      ]
+    },
+    {
+      "name": "chairs_block",
+      "rect": [
+        1.6,
+        -2.0,
+        2.6,
+        -1.2
+      ],
+      "h": 0.45,
+      "color": [
+        0.45,
+        0.45,
+        0.5,
+        1
+      ]
+    },
+    {
+      "name": "waste_bin",
+      "rect": [
+        5.7,
+        -1.5,
+        6.3,
+        -0.9
+      ],
+      "h": 0.6,
+      "color": [
+        0.3,
+        0.55,
+        0.35,
+        1
+      ]
+    }
+  ],
+  "locations": {
+    "start_location": [
+      0.0,
+      0.0,
+      1.5708
+    ],
+    "start": [
+      0.0,
+      0.0,
+      1.5708
+    ],
+    "entrance": [
+      0.0,
+      -5.0,
+      1.5708
+    ],
+    "lobby": [
+      0.0,
+      -4.0,
+      1.5708
+    ],
+    "exit": [
+      -6.0,
+      -5.0,
+      3.1416
+    ],
+    "kitchen": [
+      4.2,
+      3.2,
+      1.5708
+    ],
+    "counter": [
+      5.5,
+      3.6,
+      1.5708
+    ],
+    "dishwasher": [
+      2.6,
+      4.4,
+      1.5708
+    ],
+    "living_room": [
+      -0.3,
+      3.0,
+      1.5708
+    ],
+    "couch": [
+      -1.2,
+      4.1,
+      1.5708
+    ],
+    "side_table": [
+      1.0,
+      3.9,
+      1.5708
+    ],
+    "bookshelf": [
+      -4.0,
+      4.4,
+      1.5708
+    ],
+    "bedroom": [
+      -5.0,
+      2.5,
+      3.1416
+    ],
+    "bathroom": [
+      -5.2,
+      -3.0,
+      3.1416
+    ],
+    "office": [
+      -1.0,
+      -2.9,
+      4.7124
+    ],
+    "garage": [
+      4.5,
+      -3.5,
+      0.0
+    ],
+    "waste_basket": [
+      5.2,
+      -1.2,
+      0.0
+    ],
+    "chairs": [
+      2.1,
+      -0.7,
+      4.7124
+    ],
+    "side_tables": [
+      1.0,
+      3.9,
+      1.5708
+    ]
+  },
+  "objects": [
+    {
+      "name": "cup",
+      "kind": "cup",
+      "category": "drinkware",
+      "at": [
+        4.6,
+        3.9
+      ],
+      "z": 0.98,
+      "size": 0.07,
+      "color": [
+        0.95,
+        0.35,
+        0.3,
+        1
+      ]
+    },
+    {
+      "name": "book",
+      "kind": "book",
+      "category": "object",
+      "at": [
+        -5.6,
+        2.6
+      ],
+      "z": 0.52,
+      "size": 0.09,
+      "color": [
+        0.25,
+        0.35,
+        0.75,
+        1
+      ]
+    },
+    {
+      "name": "apple_1",
+      "kind": "apple",
+      "category": "fruit",
+      "at": [
+        0.7,
+        4.6
+      ],
+      "z": 0.62,
+      "size": 0.055,
+      "color": [
+        0.85,
+        0.2,
+        0.2,
+        1
+      ]
+    },
+    {
+      "name": "apple_2",
+      "kind": "apple",
+      "category": "fruit",
+      "at": [
+        0.95,
+        4.8
+      ],
+      "z": 0.62,
+      "size": 0.05,
+      "color": [
+        0.88,
+        0.25,
+        0.18,
+        1
+      ]
+    },
+    {
+      "name": "apple_3",
+      "kind": "apple",
+      "category": "fruit",
+      "at": [
+        1.22,
+        4.62
+      ],
+      "z": 0.62,
+      "size": 0.048,
+      "color": [
+        0.8,
+        0.22,
+        0.22,
+        1
+      ]
+    },
+    {
+      "name": "orange_1",
+      "kind": "orange",
+      "category": "fruit",
+      "at": [
+        0.75,
+        4.95
+      ],
+      "z": 0.62,
+      "size": 0.075,
+      "color": [
+        0.95,
+        0.58,
+        0.12,
+        1
+      ]
+    },
+    {
+      "name": "melon_1",
+      "kind": "melon",
+      "category": "fruit",
+      "at": [
+        1.25,
+        4.95
+      ],
+      "z": 0.65,
+      "size": 0.115,
+      "color": [
+        0.55,
+        0.75,
+        0.3,
+        1
+      ]
+    },
+    {
+      "name": "plate_1",
+      "kind": "plate",
+      "category": "dishware",
+      "at": [
+        5.2,
+        4.6
+      ],
+      "z": 0.96,
+      "size": 0.09,
+      "color": [
+        0.92,
+        0.92,
+        0.95,
+        1
+      ]
+    }
+  ],
+  "people": [
+    {
+      "name": "Angel",
+      "at": [
+        -0.6,
+        3.9
+      ],
+      "yaw": -1.5708,
+      "shirt": [
+        0.2,
+        0.45,
+        0.85,
+        1
+      ],
+      "attributes": [
+        "wearing a blue shirt",
+        "sitting on the couch"
+      ],
+      "info": {
+        "name": "Angel",
+        "pose": "sitting",
+        "shirt_colour": "blue"
+      }
+    },
+    {
+      "name": "Maria",
+      "at": [
+        0.5,
+        -4.4
+      ],
+      "yaw": 1.5708,
+      "shirt": [
+        0.12,
+        0.12,
+        0.14,
+        1
+      ],
+      "attributes": [
+        "wearing a black blouse",
+        "standing",
+        "pointing right"
+      ],
+      "info": {
+        "name": "Maria",
+        "pose": "standing",
+        "shirt_colour": "black"
+      }
+    },
+    {
+      "name": "Tom",
+      "at": [
+        -3.3,
+        3.8
+      ],
+      "yaw": 0.0,
+      "shirt": [
+        0.85,
+        0.75,
+        0.25,
+        1
+      ],
+      "attributes": [
+        "wearing a yellow shirt",
+        "standing"
+      ],
+      "info": {
+        "name": "Tom",
+        "pose": "standing",
+        "shirt_colour": "yellow"
+      }
+    }
+  ]
+}

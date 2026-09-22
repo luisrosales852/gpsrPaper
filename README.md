@@ -16,7 +16,7 @@ tests/
   _merger_helpers.py  invariant checkers + scenario harness
 scenarios/
   merger.json         26 declarative scenarios (commands + coords + expect block)
-sim/                  (empty) simulation handlers go here
+sim/                  MuJoCo visual simulation (see below)
 reference/
   gpsr_task_manager.py   the real ROS node, UNMODIFIED — on-robot wiring reference
 run_scenarios.py      smoke test: runs all 26 scenarios
@@ -54,6 +54,70 @@ duck-typed and run against plain stand-ins.
 `reference/gpsr_task_manager.py` is deliberately left with its original
 `task_manager.*` imports. It is not meant to run here.
 
+## Simulation (`sim/`)
+
+A MuJoCo apartment that runs a batch and records it, for the paper's figures.
+
+```bash
+python3.14 -m venv .venv
+.venv/bin/pip install -r sim/requirements-sim.txt
+
+.venv/bin/python -m sim.run_sim --mode merged --dry-run   # print both orderings
+.venv/bin/python -m sim.run_sim --mode both               # -> out/side_by_side.mp4
+.venv/bin/python -m sim.run_sim --mode both --no-video    # event log only (~0.1 s)
+.venv/bin/pytest tests/test_sim_run.py -q                 # assert on the event log
+```
+
+The simulator is only a *consumer* of the contribution. `sim/run_sim.py` calls the
+real `merge()` and the real `build_tree()`, exactly as
+`reference/gpsr_task_manager.GPSRTM._execute_interleaved_batch` does, and swaps in
+`sim.handlers.SimSubtaskHandler` for the robot's subtask managers. That works with no
+adapter because `leaf_behaviours._resolve_method` dispatches an action kind to *any*
+object exposing a method of that name — so a simulator is one class with 13 methods
+returning `(Status, result)`. **Nothing under `gpsr_merger/` is modified or patched.**
+
+The sequential baseline needs no new scheduling code either: `merge()` already
+returns `plan.fallback`, so the baseline is the same executor, the same handlers and
+the same world, with only the ordering changed.
+
+| file | role |
+|---|---|
+| `apartment.json` | open-plan floor plan, locations, objects, people — data only |
+| `scenarios_visual.json` | the 4-command showcase batch (all 13 leaf kinds) |
+| `world.py` | loads the apartment; exposes the `locator` the merger needs |
+| `mjcf.py` | apartment JSON → MuJoCo MJCF |
+| `robot.py` | kinematic base, gripper, pedestrians |
+| `handlers.py` | `SimSubtaskHandler` — the 13 leaf behaviours |
+| `recorder.py` | frames → ffmpeg, plus the event log written to `run.json` |
+| `overlay.py` | PIL HUD; colour-by-source-command |
+| `run_sim.py` | CLI: merged / sequential / side-by-side |
+
+Two properties make a run evidence rather than decoration:
+
+- **The gripper is enforced in the executor, not only in the tests.** `pick_object`
+  hard-fails when something is already held, so a schedule violating the single-item
+  invariant would visibly break the run — an execution-level witness for
+  `_merger_helpers.gripper_invariant_holds`.
+- **Timeouts are enforced inside the handler in sim-time**, against
+  `timeouts.timeout_for`, mirroring the real subtask managers. py_trees' `Timeout`
+  decorator only checks between ticks and the leaves block, so faking a wall-clock
+  abort would misrepresent where enforcement actually lives.
+
+Because the apartment is open-plan and the robot drives straight lines, distance
+driven equals the Euclidean cost `merger._euclidean` optimises — verified: a drive to
+`kitchen` covers 5.280152 m against a planned 5.280152 m. Planner and simulator are
+measured in the same units, with no metric mismatch to argue about.
+
+### Scope of the simulation
+
+Only `showcase_all_leaves` is fully provisioned. The 26 scenarios in
+`scenarios/merger.json` are unit tests *for the scheduler*: they reference locations
+like `A`/`loc7` and people like `Jane` that the apartment does not contain, so their
+perception leaves correctly report `TARGET_NOT_FOUND` and the tree drops to the
+fallback branch. 13 of the 26 have every `go_to` resolvable, but rendering the rest
+meaningfully would mean populating the apartment to match each one. `run_scenarios.py`
+remains the check that matters for the merger itself, and still passes 26/26.
+
 ## Still to write
 
 - **Port the two pure-Python tests.** In home2, `task_manager/scripts/test/test_hri_manager.py`
@@ -62,11 +126,6 @@ duck-typed and run against plain stand-ins.
   Swap the logger for asserts and they become pytest functions.
   `test_merged_plan_speech` (967-1026) does **not** port: it calls
   `GPSRTM._spoken_merged_plan` on the real node.
-- **Mock handlers in `sim/`.** `test_fallback_resume` contains a `RecordingHandler`
-  stub that is the natural starting point. A sim handler is any object with methods
-  named after the action kinds (`go_to`, `pick_object`, `place_object`, ...) returning
-  `(Status.EXECUTION_SUCCESS, result)`. The `locator` is just `lambda name: (x, y)`,
-  so a simulated apartment is a dict of coordinates.
 
 Note: home2's convention is to add tests to `test_hri_manager.py` rather than
 standalone pytest files, but that is tied to its ROS launch harness. With no ROS

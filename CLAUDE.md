@@ -1,0 +1,199 @@
+# CLAUDE.md
+
+Research repo for a paper on GPSR multi-command **merging**. It is a standalone
+extraction of `task_manager/task_manager/gpsr/` from `RoBorregos/home2` (branch
+`qwenUpgrade`), plus a MuJoCo simulation that produces the paper's figures.
+
+Read `README.md` too — it carries the narrative, the provenance/licensing status
+and the "still to write" list. This file is the operational map.
+
+## The one rule that shapes everything
+
+`gpsr_merger/` is **the contribution**. Nothing outside it may modify, patch,
+subclass or monkeypatch it. `sim/` and `tests/` are *consumers* — that is the
+paper's claim, and breaking it invalidates the evidence. If a sim feature seems
+to need a change in `gpsr_merger/`, that is a finding to report, not a patch to
+apply.
+
+Corollaries:
+
+- `gpsr_merger/merger.py` has **zero third-party dependencies**. Keep it that way.
+- `bt_builder.py` / `leaf_behaviours.py` may use **py_trees only**.
+- Sim-only deps live in `sim/requirements-sim.txt`, deliberately *not* merged
+  into the root `requirements.txt`.
+- `reference/gpsr_task_manager.py` is the real ROS node, **unmodified**, with its
+  original `task_manager.*` imports. It does not run here and must not be
+  "fixed". It exists as the on-robot wiring reference — when you need to know how
+  something is called for real, read `GPSRTM._execute_interleaved_batch` (line
+  ~295).
+
+## Commands
+
+```bash
+python3 run_scenarios.py          # merger smoke test — expect 26/26
+python3 run_scenarios.py -v       # also print the merged ordering per scenario
+
+# Simulation (needs the venv; Python 3.14)
+python3.14 -m venv .venv
+.venv/bin/pip install -r sim/requirements-sim.txt
+
+.venv/bin/python -m sim.run_sim --mode merged --dry-run   # print both orderings, no render
+.venv/bin/python -m sim.run_sim --mode both --no-video    # event log only, ~0.1 s
+.venv/bin/python -m sim.run_sim --mode both               # -> out/side_by_side.mp4
+.venv/bin/pytest tests/test_sim_run.py -q                 # 7 tests, headless, <1 s
+.venv/bin/python -m tests.test_sim_run                    # same checks without pytest
+```
+
+- `run_scenarios.py` needs no venv and no py_trees — that *is* the point of it.
+- Video encoding shells out to the system `ffmpeg` (`brew install ffmpeg`); there
+  is no Python video dep. `--no-video` skips it entirely, which is what CI and
+  every iteration loop should use.
+- Always run from the repo root (`-m sim.run_sim`, not `python sim/run_sim.py`);
+  the entry scripts do `sys.path.insert` of the repo root themselves.
+- Useful flags: `--fail pick_object:1` or `--fail 0.1:2` (`cmd.idx:count`) to
+  inject failures and exercise Retry → Selector → `sequential_fallback`;
+  `--print-tree`; `--scenario <name>`; `--camera iso`.
+
+## Architecture
+
+```
+gpsr_merger/           THE CONTRIBUTION — no third-party deps except py_trees in 2 files
+  merger.py            interleaving planner; merge() -> InterleavedPlan
+  bt_builder.py        build_tree() -> py_trees root Selector
+  leaf_behaviours.py   ActionLeaf, SequentialFallbackLeaf, OneShotCallbackLeaf
+  timeouts.py          per-action budgets + GLOBAL_BUDGET_S (300 s)
+  status.py            vendored 11-line Status enum
+scenarios/merger.json  26 declarative scheduler scenarios (commands + coords + expect)
+tests/_merger_helpers.py  invariant checkers, BAML stand-in builder, expect-evaluator
+tests/test_sim_run.py     7 assertions on a real headless sim run
+sim/                   MuJoCo apartment; consumer of the contribution
+reference/             the real ROS node, untouched
+out/                   generated videos + run.json + comparison.json (gitignored)
+```
+
+### merger.py
+
+`merge(commands, locator=None, origin=None) -> InterleavedPlan`
+
+1. `_decompose` each command into **go_to-led segments**.
+2. Held-Karp DP (`_optimal_schedule`) over segments, minimising 2-D Euclidean
+   travel, with two-part eligibility: per-command prefix order, and a
+   gripper-state check (only `neutral` segments may interleave while another
+   command holds the gripper).
+3. Flatten back to `PlanAction`s, then `_collapse_redundant_go_tos`.
+
+Things that will bite you:
+
+- **`_M_CAP = 16`.** Above 16 segments it silently falls back to
+  `_sequential_schedule` (Held-Karp is O(2^M · M²)). Scenario
+  `m_cap_fallback_to_sequential` pins this.
+- **`LARGE_M = 1000.0`** is the sentinel cost for any edge touching an
+  unresolved (`None`) coordinate. Unknown locations are avoided unless prefix
+  order forces them.
+- **`_TIEBREAK_EPSILON = 1e-6`** breaks ties toward per-command sequential order.
+  Must stay far below any real distance difference.
+- **`origin=None` is meaningful**, not a lazy default: it seeds the DP with no
+  origin edge, avoiding a bias toward the SLAM map origin when the real pose is
+  unknown. Scenarios cover both.
+- Everything reaches command objects through `getattr`, so plain
+  `SimpleNamespace` stand-ins work. That duck-typing is load-bearing.
+- `plan.fallback` is the per-command original sequence — the sim reuses it
+  verbatim as the sequential baseline, so no separate baseline scheduler exists.
+
+### bt_builder.py / leaf_behaviours.py
+
+```
+Selector "gpsr_root" (memory)
+  ├── Timeout(GLOBAL_BUDGET_S) ▸ Sequence "interleaved"
+  │     └── Retry(2) ▸ Timeout(timeout_for(kind)) ▸ ActionLeaf   (per action)
+  └── Sequence "sequential_fallback"
+        └── SequentialFallbackLeaf  (per command; always returns SUCCESS)
+```
+
+- **Handler dispatch is by method name.** `_resolve_method(kind, handlers)` picks
+  the first object in `subtask_handlers` exposing a callable named after the
+  action kind, calls it with the bare action object, and expects
+  `(Status, result)` (a bare `Status` is tolerated). This is the entire
+  integration surface — no registration, no base class.
+- Leaves are **synchronous and blocking**. py_trees `Timeout` decorators only
+  check between ticks, so real timeout enforcement must live *inside* the
+  handler. `sim/handlers.py` mirrors that with `robot.deadline` in sim-time —
+  do not "fix" it with a wall-clock abort, it would misrepresent where
+  enforcement lives on the robot.
+- The fallback branch always returns SUCCESS: its job is to give every command a
+  chance, not to gate on outcomes.
+- `is_completed` enables *resume* rather than restart in the fallback: a
+  completed non-`go_to` is skipped, and a `go_to` is skipped only when its whole
+  following segment is already done.
+
+### sim/
+
+| file | role |
+|---|---|
+| `apartment.json` | open-plan floor plan: bounds, zones, furniture, 19 locations, 8 objects, 3 people — data only |
+| `scenarios_visual.json` | `showcase_all_leaves`: 4 commands whose union hits all 13 leaf kinds |
+| `world.py` | loads the apartment; `World.locator` is the merger-facing contract (mirrors `GPSRTM._resolve_xy`, returns `None` for unknown) |
+| `mjcf.py` | apartment JSON → MuJoCo MJCF string |
+| `robot.py` | kinematic base, gripper, pedestrians; raises `SimTimeout` past `deadline` |
+| `handlers.py` | `SimSubtaskHandler` — the 13 leaf implementations |
+| `recorder.py` | frames → ffmpeg; writes the event log to `run.json` |
+| `overlay.py` | PIL HUD, colour-by-source-command |
+| `run_sim.py` | CLI: merged / sequential / both |
+
+The apartment is **open-plan on purpose**: the robot drives straight lines, so
+driven distance is directly comparable to `merger._euclidean`. Do not add
+interior walls or a path planner without saying so loudly — it would break the
+metric equivalence the paper leans on.
+
+`out/{merged,sequential}/run.json` holds `summary`, `events`, `waypoints`,
+`trail`. Events come in `start`/`end` pairs with
+`t, phase, kind, cmd, idx, status, result, x, y, held, distance_m, branch`.
+Tests assert on this log, never on pixels.
+
+## Tests and invariants
+
+`tests/_merger_helpers.py` states the machine-checkable properties — cite these
+by name in the paper:
+
+- `non_goto_actions_preserved` — no command (or part of one) is dropped.
+  `go_to` is exempt because collapse legitimately dedups navigation.
+- `per_command_order_preserved` — intra-command sequencing never violated.
+- `gripper_invariant_holds` / `gripper_walk_strict` — one item at a time, drop
+  before pick; strict also requires the *same* command to release its own pick.
+- `fallback_preserves_all` — each per-command fallback reproduces its command.
+
+`tests/test_sim_run.py` re-witnesses these at execution time, plus
+`test_merged_travels_less_than_sequential` and
+`test_cost_model_gap_is_attributable_to_non_goto_displacement` (the planner only
+models `go_to` hops, so the gap must come from follow/guide/pick stand-off).
+
+**Adding a merger scenario:** append an object to `scenarios/merger.json` with
+`commands`, optional `coords` / `origin`, and an `expect` block. Every key in
+`expect` is optional; the supported checks are exactly the keys handled in
+`tests/_merger_helpers.evaluate_expectations` (`plan_kinds`, `go_to_order`,
+`location_visit_counts`, `precedence_per_cmd`, `gripper_walk_strict`, …). Add a
+new check there rather than writing a bespoke test.
+
+**Adding a leaf kind** means touching three places: `timeouts.ACTION_TIMEOUTS`,
+a same-named method on `sim/handlers.SimSubtaskHandler`, and `ALL_KINDS` in
+`tests/test_sim_run.py`.
+
+## Scope limits worth remembering
+
+- Only `showcase_all_leaves` is fully provisioned in the apartment. The 26
+  scenarios in `scenarios/merger.json` are unit tests *for the scheduler*; they
+  reference locations like `A`/`loc7` and people like `Jane` that do not exist in
+  the apartment, so their perception leaves correctly report `TARGET_NOT_FOUND`.
+  That is expected, not a bug. `run_scenarios.py` is the check that matters for
+  the merger.
+- Scope claims to **the merger**. The "first part of the first command goes
+  missing" symptom traced to upstream LLM decomposition, not to this code.
+- **Licensing is unresolved** — home2 has no LICENSE file. Settle with RoBorregos
+  before this repo goes public. Two authors touched the source folder (see
+  README).
+
+## Repo state
+
+Single commit (`dc91000 first`). `sim/`, `tests/test_sim_run.py` and `.gitignore`
+are currently untracked and `README.md` is modified — the simulation work is not
+committed yet. `out/`, `.venv/` and `__pycache__/` are gitignored.
