@@ -15,17 +15,17 @@ gpsr_merger/          the contribution
 tests/
   _merger_helpers.py  invariant checkers + scenario harness
 scenarios/
-  merger.json         26 declarative scenarios (commands + coords + expect block)
+  merger.json         27 declarative scenarios (commands + coords + expect block)
 sim/                  MuJoCo visual simulation (see below)
 reference/
   gpsr_task_manager.py   the real ROS node, UNMODIFIED — on-robot wiring reference
-run_scenarios.py      smoke test: runs all 26 scenarios
+run_scenarios.py      smoke test: runs all 27 scenarios
 ```
 
 ## Running
 
 ```bash
-python3 run_scenarios.py       # 26/26 expected
+python3 run_scenarios.py       # 27/27 expected
 python3 run_scenarios.py -v    # also print the merged ordering per scenario
 ```
 
@@ -54,6 +54,16 @@ duck-typed and run against plain stand-ins.
 `reference/gpsr_task_manager.py` is deliberately left with its original
 `task_manager.*` imports. It is not meant to run here.
 
+### Deviation from upstream
+
+One bug fix has since been made in `merger.py`, so it no longer matches `home2`
+byte-for-byte. A segment's gripper state is now taken from its *last* gripper
+action (`_Segment.ends_holding`), instead of assuming pick-before-place. Upstream,
+a segment doing `place X, pick Y` with no `go_to` between was treated as ending
+empty, letting another command's pick interleave and the robot hold two items.
+Pinned by scenario `place_then_pick_in_one_segment_still_holds`. Not yet ported
+back to `home2`.
+
 ## Simulation (`sim/`)
 
 A MuJoCo apartment that runs a batch and records it, for the paper's figures.
@@ -63,7 +73,7 @@ python3.14 -m venv .venv
 .venv/bin/pip install -r sim/requirements-sim.txt
 
 .venv/bin/python -m sim.run_sim --mode merged --dry-run   # print both orderings
-.venv/bin/python -m sim.run_sim --mode both               # -> out/side_by_side.mp4
+.venv/bin/python -m sim.run_sim --mode both               # -> out/side_by_side.{mp4,png}
 .venv/bin/python -m sim.run_sim --mode both --no-video    # event log only (~0.1 s)
 .venv/bin/pytest tests/test_sim_run.py -q                 # assert on the event log
 ```
@@ -83,14 +93,38 @@ the same world, with only the ordering changed.
 | file | role |
 |---|---|
 | `apartment.json` | open-plan floor plan, locations, objects, people — data only |
-| `scenarios_visual.json` | the 4-command showcase batch (all 13 leaf kinds) |
+| `scenarios_visual.json` | `showcase_merge` (the demo, default) and `showcase_all_leaves` (all 13 leaf kinds) |
 | `world.py` | loads the apartment; exposes the `locator` the merger needs |
 | `mjcf.py` | apartment JSON → MuJoCo MJCF |
 | `robot.py` | kinematic base, gripper, pedestrians |
 | `handlers.py` | `SimSubtaskHandler` — the 13 leaf behaviours |
 | `recorder.py` | frames → ffmpeg, plus the event log written to `run.json` |
 | `overlay.py` | PIL HUD; colour-by-source-command |
+| `compose.py` | the side-by-side race video: shared clock, Gantt timeline, end card |
 | `run_sim.py` | CLI: merged / sequential / side-by-side |
+
+### The demo: `showcase_merge`
+
+Four commands that each zig-zag between the north and south halves of the flat
+(kitchen → garage, bedroom → bookshelf, entrance → bathroom, side table → office).
+One after another they criss-cross the apartment; merged, the DP sweeps each region
+once. Measured in the sim, with all 17 actions succeeding in both runs:
+
+| | time | driven |
+|---|---|---|
+| merged | 113.6 s | 33.0 m |
+| sequential | 158.4 s | 57.6 m |
+| saved | **44.7 s (28%)** | **24.6 m (43%)** |
+
+Time saved is smaller in relative terms than distance, because perception and
+manipulation take the same time in both orderings. The merger only removes
+driving. `showcase_all_leaves` shows why the scenario matters: its commands are
+already local, so merging saves only ~3%. That run exists for leaf coverage, not
+as a demo.
+
+`out/side_by_side.mp4` shows both runs on one clock, with a Gantt timeline
+coloured by command. The merged bar interleaves colours; the sequential bar is four
+blocks with long driving stretches. `out/side_by_side.png` is the final still.
 
 Two properties make a run evidence rather than decoration:
 
@@ -110,13 +144,13 @@ measured in the same units, with no metric mismatch to argue about.
 
 ### Scope of the simulation
 
-Only `showcase_all_leaves` is fully provisioned. The 26 scenarios in
+Only `showcase_merge` and `showcase_all_leaves` are fully provisioned. The 27 scenarios in
 `scenarios/merger.json` are unit tests *for the scheduler*: they reference locations
 like `A`/`loc7` and people like `Jane` that the apartment does not contain, so their
 perception leaves correctly report `TARGET_NOT_FOUND` and the tree drops to the
-fallback branch. 13 of the 26 have every `go_to` resolvable, but rendering the rest
+fallback branch. 13 of the 27 have every `go_to` resolvable, but rendering the rest
 meaningfully would mean populating the apartment to match each one. `run_scenarios.py`
-remains the check that matters for the merger itself, and still passes 26/26.
+remains the check that matters for the merger itself, and still passes 27/27.
 
 ## Still to write
 

@@ -2,35 +2,184 @@
   {
     "name": "showcase_all_leaves",
     "description": "Four spoken commands whose union exercises all 13 leaf behaviours. c1 and c2 are entirely gripper-neutral, so the DP is free to interleave them into c0's and c3's atomic pick->release blocks.",
-    "origin": [0.0, 0.0],
+    "origin": [
+      0.0,
+      0.0
+    ],
     "commands": [
       [
-        {"action": "go_to", "location_to_go": "kitchen"},
-        {"action": "pick_object", "object_to_pick": "cup"},
-        {"action": "go_to", "location_to_go": "living_room"},
-        {"action": "find_person_by_name", "name": "Angel"},
-        {"action": "give_object"}
+        {
+          "action": "go_to",
+          "location_to_go": "kitchen"
+        },
+        {
+          "action": "pick_object",
+          "object_to_pick": "cup"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "living_room"
+        },
+        {
+          "action": "find_person_by_name",
+          "name": "Angel"
+        },
+        {
+          "action": "give_object"
+        }
       ],
       [
-        {"action": "go_to", "location_to_go": "side_table"},
-        {"action": "count", "target_to_count": "apples"},
-        {"action": "get_visual_info", "measure": "biggest", "object_category": "fruit"},
-        {"action": "go_to", "location_to_go": "start_location"},
-        {"action": "say_with_context", "user_instruction": "the fruit on the side table", "previous_command_info": []}
+        {
+          "action": "go_to",
+          "location_to_go": "side_table"
+        },
+        {
+          "action": "count",
+          "target_to_count": "apples"
+        },
+        {
+          "action": "get_visual_info",
+          "measure": "biggest",
+          "object_category": "fruit"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "start_location"
+        },
+        {
+          "action": "say_with_context",
+          "user_instruction": "the fruit on the side table",
+          "previous_command_info": []
+        }
       ],
       [
-        {"action": "go_to", "location_to_go": "entrance"},
-        {"action": "find_person", "attribute_value": "wearing a black blouse"},
-        {"action": "get_person_info", "info_type": "name"},
-        {"action": "guide_person_to", "destination_room": "bathroom"}
+        {
+          "action": "go_to",
+          "location_to_go": "entrance"
+        },
+        {
+          "action": "find_person",
+          "attribute_value": "wearing a black blouse"
+        },
+        {
+          "action": "get_person_info",
+          "info_type": "name"
+        },
+        {
+          "action": "guide_person_to",
+          "destination_room": "bathroom"
+        }
       ],
       [
-        {"action": "go_to", "location_to_go": "bedroom"},
-        {"action": "pick_object", "object_to_pick": "book"},
-        {"action": "go_to", "location_to_go": "bookshelf"},
-        {"action": "place_object"},
-        {"action": "answer_question"},
-        {"action": "follow_person_until", "destination": "dishwasher"}
+        {
+          "action": "go_to",
+          "location_to_go": "bedroom"
+        },
+        {
+          "action": "pick_object",
+          "object_to_pick": "book"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "bookshelf"
+        },
+        {
+          "action": "place_object"
+        },
+        {
+          "action": "answer_question"
+        },
+        {
+          "action": "follow_person_until",
+          "destination": "dishwasher"
+        }
+      ]
+    ]
+  },
+  {
+    "name": "showcase_merge",
+    "description": "The demo scenario for the merger. Four GPSR commands that each zig-zag between the north and south halves of the apartment: run one after another they criss-cross the flat, merged the Held-Karp DP sweeps each region once. Planned travel 32.9 m merged vs 57.5 m sequential (-43%). Leaf coverage is showcase_all_leaves' job, not this one's.",
+    "origin": [
+      0.0,
+      0.0
+    ],
+    "commands": [
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "kitchen"
+        },
+        {
+          "action": "count",
+          "target_to_count": "cups"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "garage"
+        },
+        {
+          "action": "say_with_context",
+          "user_instruction": "how many cups are in the kitchen",
+          "previous_command_info": []
+        }
+      ],
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "bedroom"
+        },
+        {
+          "action": "pick_object",
+          "object_to_pick": "book"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "bookshelf"
+        },
+        {
+          "action": "place_object"
+        }
+      ],
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "entrance"
+        },
+        {
+          "action": "find_person",
+          "attribute_value": "wearing a black blouse"
+        },
+        {
+          "action": "get_person_info",
+          "info_type": "name"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "bathroom"
+        },
+        {
+          "action": "answer_question"
+        }
+      ],
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "side_table"
+        },
+        {
+          "action": "get_visual_info",
+          "measure": "biggest",
+          "object_category": "fruit"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "office"
+        },
+        {
+          "action": "say_with_context",
+          "user_instruction": "the biggest fruit on the side table",
+          "previous_command_info": []
+        }
       ]
     ]
   }

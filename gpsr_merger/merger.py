@@ -74,10 +74,9 @@ class _Segment:
     cmd: int
     indices: List[int]  # action indices within the source command
     location: Optional[str]  # the navigation target (from a leading go_to)
-    acquires: bool
-    releases: bool
     # Gripper state after the segment, set by its *last* gripper action
-    # (True = held, False = empty); None if it has no gripper action.
+    # (True = held, False = empty); None if it has no gripper action,
+    # i.e. the segment is gripper-neutral.
     ends_holding: Optional[bool] = None
 
 
@@ -91,26 +90,20 @@ def _decompose(cmd_idx: int, command: Any) -> List[_Segment]:
     segments: List[_Segment] = []
     cur_loc: Optional[str] = None
     cur_indices: List[int] = []
-    cur_acq = False
-    cur_rel = False
     cur_end: Optional[bool] = None
 
     def flush() -> None:
-        nonlocal cur_indices, cur_acq, cur_rel, cur_end, cur_loc
+        nonlocal cur_indices, cur_end, cur_loc
         if cur_indices:
             segments.append(
                 _Segment(
                     cmd=cmd_idx,
                     indices=list(cur_indices),
                     location=cur_loc,
-                    acquires=cur_acq,
-                    releases=cur_rel,
                     ends_holding=cur_end,
                 )
             )
         cur_indices = []
-        cur_acq = False
-        cur_rel = False
         cur_end = None
 
     for i, action in enumerate(actions):
@@ -122,10 +115,8 @@ def _decompose(cmd_idx: int, command: Any) -> List[_Segment]:
         else:
             cur_indices.append(i)
             if kind in _GRIPPER_ACQUIRES:
-                cur_acq = True
                 cur_end = True
             if kind in _GRIPPER_RELEASES:
-                cur_rel = True
                 cur_end = False
     flush()
     return segments
@@ -143,14 +134,6 @@ def _segment_xy(seg: _Segment, locator: Locator) -> Optional[Tuple[float, float]
     if seg.location is None:
         return None
     return locator(seg.location)
-
-
-def _seg_kind(seg: _Segment) -> str:
-    if seg.acquires:
-        return "acquires"
-    if seg.releases:
-        return "releases"
-    return "neutral"
 
 
 def _build_holding_after(
@@ -199,7 +182,6 @@ def _optimal_schedule(
     seg_pos: Sequence[int],
     cmd_seg_mask: Sequence[int],
     holding_after: Sequence[Sequence[bool]],
-    seg_kinds: Sequence[str],
     n_cmds: int,
     locator: Locator,
     origin: Optional[Tuple[float, float]],
@@ -214,7 +196,8 @@ def _optimal_schedule(
       1. Per-command prefix: bin(S & cmd_seg_mask[seg_cmd[u]]).count("1")
          must equal seg_pos[u].
       2. Gripper-state: if some command c' currently holds the gripper and
-         c' != seg_cmd[u], then seg_kinds[u] must be "neutral".
+         c' != seg_cmd[u], then segment u must be gripper-neutral
+         (segments[u].ends_holding is None).
 
     Cost: f(S|{u}, u) = f(S, last) + dist(seg_xy[last], seg_xy[u])
                        + epsilon * (seg_cmd[u] != seg_cmd[last]).
@@ -260,7 +243,7 @@ def _optimal_schedule(
                 if cnt != seg_pos[u]:
                     continue
                 if holder is not None and holder != seg_cmd[u]:
-                    if seg_kinds[u] != "neutral":
+                    if segments[u].ends_holding is not None:
                         continue
                 cand = (
                     cur_cost
@@ -343,7 +326,6 @@ def merge(
             cmd_seg_mask[c] |= 1 << gi
             gi += 1
 
-    seg_kinds = [_seg_kind(seg) for seg in flat_segments]
     holding_after = _build_holding_after(segments_per_cmd)
 
     if M > _M_CAP:
@@ -355,7 +337,6 @@ def merge(
             seg_pos,
             cmd_seg_mask,
             holding_after,
-            seg_kinds,
             n_cmds,
             loc_fn,
             origin,

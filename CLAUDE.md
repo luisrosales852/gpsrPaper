@@ -30,7 +30,7 @@ Corollaries:
 ## Commands
 
 ```bash
-python3 run_scenarios.py          # merger smoke test — expect 26/26
+python3 run_scenarios.py          # merger smoke test — expect 27/27
 python3 run_scenarios.py -v       # also print the merged ordering per scenario
 
 # Simulation (needs the venv; Python 3.14)
@@ -39,8 +39,9 @@ python3.14 -m venv .venv
 
 .venv/bin/python -m sim.run_sim --mode merged --dry-run   # print both orderings, no render
 .venv/bin/python -m sim.run_sim --mode both --no-video    # event log only, ~0.1 s
-.venv/bin/python -m sim.run_sim --mode both               # -> out/side_by_side.mp4
-.venv/bin/pytest tests/test_sim_run.py -q                 # 7 tests, headless, <1 s
+.venv/bin/python -m sim.run_sim --mode both               # -> out/side_by_side.{mp4,png}, ~1 min
+.venv/bin/python -m sim.run_sim --scenario showcase_all_leaves   # 13-leaf coverage run
+.venv/bin/pytest tests/test_sim_run.py -q                 # 8 tests, headless, <1 s
 .venv/bin/python -m tests.test_sim_run                    # same checks without pytest
 ```
 
@@ -53,6 +54,9 @@ python3.14 -m venv .venv
 - Useful flags: `--fail pick_object:1` or `--fail 0.1:2` (`cmd.idx:count`) to
   inject failures and exercise Retry → Selector → `sequential_fallback`;
   `--print-tree`; `--scenario <name>`; `--camera iso`.
+- Defaults are tuned for the 1080p race video: `--width 832 --height 720` matches
+  the apartment's aspect (no grey side bars), `--speed 3.0`. Both modes must share
+  one `--speed`/`--fps`, since `compose.py` lines them up on sim time.
 
 ## Architecture
 
@@ -63,7 +67,7 @@ gpsr_merger/           THE CONTRIBUTION — no third-party deps except py_trees 
   leaf_behaviours.py   ActionLeaf, SequentialFallbackLeaf, OneShotCallbackLeaf
   timeouts.py          per-action budgets + GLOBAL_BUDGET_S (300 s)
   status.py            vendored 11-line Status enum
-scenarios/merger.json  26 declarative scheduler scenarios (commands + coords + expect)
+scenarios/merger.json  27 declarative scheduler scenarios (commands + coords + expect)
 tests/_merger_helpers.py  invariant checkers, BAML stand-in builder, expect-evaluator
 tests/test_sim_run.py     7 assertions on a real headless sim run
 sim/                   MuJoCo apartment; consumer of the contribution
@@ -131,14 +135,15 @@ Selector "gpsr_root" (memory)
 | file | role |
 |---|---|
 | `apartment.json` | open-plan floor plan: bounds, zones, furniture, 19 locations, 8 objects, 3 people — data only |
-| `scenarios_visual.json` | `showcase_all_leaves`: 4 commands whose union hits all 13 leaf kinds |
+| `scenarios_visual.json` | `showcase_merge` (**default, the demo**): 4 commands that each zig-zag north↔south, so ordering matters — merged is ~28% faster / ~43% less driving. `showcase_all_leaves`: 4 commands whose union hits all 13 leaf kinds (coverage; the 7 original tests use it, and it saves only ~3% so it is a poor demo) |
 | `world.py` | loads the apartment; `World.locator` is the merger-facing contract (mirrors `GPSRTM._resolve_xy`, returns `None` for unknown) |
 | `mjcf.py` | apartment JSON → MuJoCo MJCF string |
 | `robot.py` | kinematic base, gripper, pedestrians; raises `SimTimeout` past `deadline` |
 | `handlers.py` | `SimSubtaskHandler` — the 13 leaf implementations |
 | `recorder.py` | frames → ffmpeg; writes the event log to `run.json` |
 | `overlay.py` | PIL HUD, colour-by-source-command |
-| `run_sim.py` | CLI: merged / sequential / both |
+| `compose.py` | `--mode both` only: decodes both `run.mp4`s, crops their HUD panels and composes the 1920×1080 race video — per-pane clock/distance/current action, a Gantt timeline on a shared time axis (command colour; half shade = `go_to`), finish stamps, end card. Also writes `side_by_side.png` (clean final still) and `side_by_side_endcard.png` |
+| `run_sim.py` | CLI: merged / sequential / both; writes `comparison.json` |
 
 The apartment is **open-plan on purpose**: the robot drives straight lines, so
 driven distance is directly comparable to `merger._euclidean`. Do not add
@@ -146,7 +151,11 @@ interior walls or a path planner without saying so loudly — it would break the
 metric equivalence the paper leans on.
 
 `out/{merged,sequential}/run.json` holds `summary`, `events`, `waypoints`,
-`trail`. Events come in `start`/`end` pairs with
+`trail`, `labels` and `frames` (`[t, distance_m]` per captured video frame — how
+`compose.py` syncs the panes). `summary.task_time_s` is the last action's end;
+`sim_time_s` also includes the 1.2 s idle hold, so compare `task_time_s`.
+`comparison.json` carries `saved_m`/`saved_pct` and `time_saved_s`/`time_saved_pct`.
+Events come in `start`/`end` pairs with
 `t, phase, kind, cmd, idx, status, result, x, y, held, distance_m, branch`.
 Tests assert on this log, never on pixels.
 
@@ -180,7 +189,7 @@ a same-named method on `sim/handlers.SimSubtaskHandler`, and `ALL_KINDS` in
 
 ## Scope limits worth remembering
 
-- Only `showcase_all_leaves` is fully provisioned in the apartment. The 26
+- Only `showcase_merge` and `showcase_all_leaves` are fully provisioned in the apartment. The 27
   scenarios in `scenarios/merger.json` are unit tests *for the scheduler*; they
   reference locations like `A`/`loc7` and people like `Jane` that do not exist in
   the apartment, so their perception leaves correctly report `TARGET_NOT_FOUND`.
@@ -194,6 +203,5 @@ a same-named method on `sim/handlers.SimSubtaskHandler`, and `ALL_KINDS` in
 
 ## Repo state
 
-Single commit (`dc91000 first`). `sim/`, `tests/test_sim_run.py` and `.gitignore`
-are currently untracked and `README.md` is modified — the simulation work is not
-committed yet. `out/`, `.venv/` and `__pycache__/` are gitignored.
+The simulation is committed (`935fdc9 doing simulation`). `out/`, `.venv/` and
+`__pycache__/` are gitignored — regenerate videos with `--mode both`.

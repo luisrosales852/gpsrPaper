@@ -59,6 +59,9 @@ class Recorder:
         self._next_capture = 0.0
         self._next_trail = 0.0
         self._frames = 0
+        # (sim-time, metres driven) per captured frame; lets sim.compose line
+        # two runs up on one clock without trusting frame indices.
+        self.frame_log: List[Tuple[float, float]] = []
         self._renderer = mujoco.Renderer(model, height, width) if video else None
         self._proc = self._open_ffmpeg() if video else None
 
@@ -131,7 +134,10 @@ class Recorder:
 
         if self._renderer is None or self._proc is None or robot.t < self._next_capture:
             return
-        self._next_capture = robot.t + self.speed / self.fps
+        # Advance on the schedule, not from robot.t: ticks overshoot by up to
+        # one DT and re-basing on them would let the frame clock drift.
+        self._next_capture += self.speed / self.fps
+        self.frame_log.append((round(robot.t, 4), round(robot.distance_m, 4)))
 
         self._renderer.update_scene(self.d, camera=self.camera)
         img = Image.fromarray(self._renderer.render())
@@ -205,6 +211,8 @@ class Recorder:
                 "summary": self.summary(extra),
                 "events": self.events,
                 "waypoints": self.waypoints,
+                "labels": self.labels,
+                "frames": self.frame_log,
                 "trail": [[round(x, 3), round(y, 3), c] for x, y, c in self.trail],
             }, f, indent=1)
         return path

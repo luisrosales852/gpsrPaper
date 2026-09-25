@@ -9,14 +9,13 @@ robot, and only swaps the subtask managers for simulated ones.
 
     python -m sim.run_sim --mode merged --dry-run
     python -m sim.run_sim --mode merged
-    python -m sim.run_sim --mode both          # -> out/side_by_side.mp4
+    python -m sim.run_sim --mode both          # -> out/side_by_side.mp4 (sim/compose.py)
 """
 
 import argparse
 import json
 import math
 import os
-import subprocess
 import sys
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -29,6 +28,7 @@ from gpsr_merger.bt_builder import build_tree, render_tree_ascii  # noqa: E402
 from gpsr_merger.merger import InterleavedPlan, merge  # noqa: E402
 from gpsr_merger.status import Status  # noqa: E402
 from gpsr_merger.timeouts import GLOBAL_BUDGET_S  # noqa: E402
+from sim.compose import compose  # noqa: E402
 from sim.handlers import SimSubtaskHandler  # noqa: E402
 from sim.mjcf import build_xml  # noqa: E402
 from sim.recorder import Recorder  # noqa: E402
@@ -165,6 +165,9 @@ def run_once(sc: dict, mode: str, out_dir: str, args) -> dict:
             1 for a, b in zip(exec_plan.actions, exec_plan.actions[1:])
             if a.source_cmd != b.source_cmd),
     }
+    ends = [e for e in rec.events if e["phase"] == "end"]
+    # When the last action finished — sim_time_s also includes the idle hold.
+    extra["task_time_s"] = ends[-1]["t"] if ends else 0.0
     extra["cost_model_gap_m"] = round(
         rec.summary()["actual_distance_m"] - extra["planned_cost_m"], 3)
     summary = rec.summary(extra)
@@ -174,38 +177,19 @@ def run_once(sc: dict, mode: str, out_dir: str, args) -> dict:
     return summary
 
 
-def stack(left: str, right: str, out: str) -> str:
-    """hstack the two runs, freezing the shorter one on its last frame."""
-    def dur(p):
-        r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
-                            "-of", "default=nw=1:nk=1", p], capture_output=True, text=True)
-        return float(r.stdout.strip())
-
-    dl, dr = dur(left), dur(right)
-    pad_l = max(0.0, dr - dl) + 0.05
-    pad_r = max(0.0, dl - dr) + 0.05
-    subprocess.run([
-        "ffmpeg", "-y", "-loglevel", "error", "-i", left, "-i", right,
-        "-filter_complex",
-        f"[0:v]tpad=stop_mode=clone:stop_duration={pad_l:.2f}[a];"
-        f"[1:v]tpad=stop_mode=clone:stop_duration={pad_r:.2f}[b];[a][b]hstack=inputs=2",
-        "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p", out,
-    ], check=True)
-    return out
-
-
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--scenario", default="showcase_all_leaves")
+    ap.add_argument("--scenario", default="showcase_merge",
+                    help="showcase_merge (demo) or showcase_all_leaves (13-leaf coverage)")
     ap.add_argument("--mode", choices=["merged", "sequential", "both"], default="both")
     ap.add_argument("--out", default=os.path.join(ROOT, "out"))
     ap.add_argument("--apartment", default=os.path.join(HERE, "apartment.json"))
     ap.add_argument("--camera", default="topdown", choices=["topdown", "iso"])
-    ap.add_argument("--width", type=int, default=920)
+    ap.add_argument("--width", type=int, default=832)
     ap.add_argument("--height", type=int, default=720)
     ap.add_argument("--fps", type=int, default=30)
-    ap.add_argument("--speed", type=float, default=2.5,
+    ap.add_argument("--speed", type=float, default=3.0,
                     help="sim-seconds per video second")
     ap.add_argument("--retries", type=int, default=2)
     ap.add_argument("--budget", type=float, default=GLOBAL_BUDGET_S)
@@ -247,18 +231,26 @@ def main() -> int:
             print(f"  video: {s['video']}  ({s['frames']} frames)")
 
     if args.mode == "both" and all(results[m].get("video") for m in results):
-        out = os.path.join(args.out, "side_by_side.mp4")
-        stack(results["merged"]["video"], results["sequential"]["video"], out)
+        out = compose(args.out, sc["name"], args.fps, args.speed)
+        print(f"\nside-by-side: {out}")
+
+    if args.mode == "both":
         md, sq = results["merged"], results["sequential"]
         saved = sq["actual_distance_m"] - md["actual_distance_m"]
         pct = 100.0 * saved / sq["actual_distance_m"] if sq["actual_distance_m"] else 0.0
-        print(f"\nside-by-side: {out}")
-        print(f"travel: merged {md['actual_distance_m']:.2f} m vs "
+        t_saved = sq["task_time_s"] - md["task_time_s"]
+        t_pct = 100.0 * t_saved / sq["task_time_s"] if sq["task_time_s"] else 0.0
+        print(f"\ntravel: merged {md['actual_distance_m']:.2f} m vs "
               f"sequential {sq['actual_distance_m']:.2f} m  "
               f"-> saved {saved:.2f} m ({pct:.1f}%)")
+        print(f"time:   merged {md['task_time_s']:.1f} s vs "
+              f"sequential {sq['task_time_s']:.1f} s  "
+              f"-> saved {t_saved:.1f} s ({t_pct:.1f}%)")
         with open(os.path.join(args.out, "comparison.json"), "w") as f:
             json.dump({"scenario": sc["name"], "merged": md, "sequential": sq,
-                       "saved_m": round(saved, 3), "saved_pct": round(pct, 2)}, f, indent=1)
+                       "saved_m": round(saved, 3), "saved_pct": round(pct, 2),
+                       "time_saved_s": round(t_saved, 3),
+                       "time_saved_pct": round(t_pct, 2)}, f, indent=1)
     return 0
 
 

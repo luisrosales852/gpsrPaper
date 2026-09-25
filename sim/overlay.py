@@ -114,30 +114,36 @@ def draw_scene_annotations(img: Image.Image, M: np.ndarray, state: dict) -> None
     """Trail, waypoint pins, badges and the speech bubble, in world space."""
     d = ImageDraw.Draw(img, "RGBA")
 
-    # Trail: one polyline per contiguous same-command run.
+    # Trail: one polyline per contiguous same-command run, over a dark casing
+    # so it stays legible on the pale zone floors.
     trail = state.get("trail", [])
+    runs: List[Tuple[int, List[Tuple[float, float]]]] = []
     run: List[Tuple[float, float]] = []
     run_cmd = None
     for (x, y, c) in trail:
         p = project(M, (x, y, 0.05))
         if c != run_cmd:
             if len(run) > 1:
-                d.line(run, fill=cmd_color(run_cmd) + (215,), width=6, joint="curve")
+                runs.append((run_cmd, run))
             run = run[-1:] if run else []
             run_cmd = c
         run.append(p)
     if len(run) > 1 and run_cmd is not None:
-        d.line(run, fill=cmd_color(run_cmd) + (215,), width=6, joint="curve")
+        runs.append((run_cmd, run))
+    for _, pts in runs:
+        d.line(pts, fill=(18, 20, 26, 80), width=9, joint="curve")
+    for c, pts in runs:
+        d.line(pts, fill=cmd_color(c) + (235,), width=6, joint="curve")
 
     # Visited waypoints, numbered in execution order.
     for i, wp in enumerate(state.get("waypoints", [])):
         px, py = project(M, (wp["x"], wp["y"], 0.05))
         col = cmd_color(wp["cmd"])
-        d.ellipse((px - 13, py - 13, px + 13, py + 13), fill=col + (235,),
+        d.ellipse((px - 11, py - 11, px + 11, py + 11), fill=col + (240,),
                   outline=(255, 255, 255), width=2)
         t = str(i + 1)
-        f = font("DejaVuSans-Bold.ttf", 15)
-        d.text((px - d.textlength(t, font=f) / 2, py - 9), t, font=f, fill=(255, 255, 255))
+        f = font("DejaVuSans-Bold.ttf", 13)
+        d.text((px - d.textlength(t, font=f) / 2, py - 8), t, font=f, fill=(255, 255, 255))
 
     # Robot ring: keeps the base trackable at plan-view zoom and repeats the
     # source-command colour that the trail and the command list already use.

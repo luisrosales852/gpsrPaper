@@ -39,16 +39,17 @@ def _args(out):
         print_tree=False, out=out)
 
 
-def run(mode):
-    """One headless run per mode, memoised across tests."""
-    if mode not in _cache:
-        sc = load_scenario("showcase_all_leaves")
+def run(mode, scenario="showcase_all_leaves"):
+    """One headless run per (scenario, mode), memoised across tests."""
+    key = (scenario, mode)
+    if key not in _cache:
+        sc = load_scenario(scenario)
         with tempfile.TemporaryDirectory() as td:
             summary = run_once(sc, mode, os.path.join(td, mode), _args(td))
             import json
             with open(os.path.join(td, mode, "run.json")) as f:
-                _cache[mode] = (summary, json.load(f), sc)
-    return _cache[mode]
+                _cache[key] = (summary, json.load(f), sc)
+    return _cache[key]
 
 
 def _ends(log):
@@ -111,6 +112,19 @@ def test_merged_travels_less_than_sequential():
     assert m["actual_distance_m"] < s["actual_distance_m"], (
         f"merged {m['actual_distance_m']} m !< sequential {s['actual_distance_m']} m")
     assert m["planned_cost_m"] < s["planned_cost_m"]
+
+
+def test_showcase_merge_finishes_sooner():
+    """The demo scenario must earn its place: same actions, all succeed, and the
+    merged run is clearly faster end-to-end — not just shorter on paper.
+    Measured: ~28% less time, ~43% less driving."""
+    m, _, _ = run("merged", "showcase_merge")
+    s, _, _ = run("sequential", "showcase_merge")
+    for x in (m, s):
+        assert x["actions_succeeded"] == x["actions_executed"] == m["actions_executed"]
+    assert m["task_time_s"] <= 0.85 * s["task_time_s"], (m["task_time_s"], s["task_time_s"])
+    assert m["actual_distance_m"] <= 0.70 * s["actual_distance_m"], (
+        m["actual_distance_m"], s["actual_distance_m"])
 
 
 def test_cost_model_gap_is_attributable_to_non_goto_displacement():
