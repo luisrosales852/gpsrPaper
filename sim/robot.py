@@ -10,8 +10,9 @@ place the recorder is ticked — so sim time, robot pose, carried-object pose an
 captured frames can never drift out of sync.
 """
 
+import bisect
 import math
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, List, Optional, Sequence, Tuple
 
 import mujoco
 import numpy as np
@@ -195,6 +196,24 @@ class SimRobot:
             self.turn_to(yaw)
         return travelled
 
+    def drive_path(self, waypoints: Sequence[Tuple[float, float]], yaw: Optional[float] = None,
+                   stop_within: float = 0.0) -> float:
+        """``drive_to`` each waypoint in turn (a path from ``sim.routing``).
+
+        ``stop_within`` and ``yaw`` apply to the final waypoint only; distance,
+        deadline and recorder ticking are exactly those of ``drive_to``.
+        """
+        travelled = 0.0
+        last = len(waypoints) - 1
+        for i, (x, y) in enumerate(waypoints):
+            if i < last:
+                travelled += self.drive_to(x, y)
+            else:
+                travelled += self.drive_to(x, y, yaw=yaw, stop_within=stop_within)
+        if not waypoints and yaw is not None:
+            self.turn_to(yaw)
+        return travelled
+
     def scan(self, sweep: float = 1.05, duration: float = 2.4) -> None:
         """Yaw sweep ±``sweep``/2, the visible signature of a perception leaf."""
         start = self.yaw
@@ -234,50 +253,75 @@ class SimRobot:
             self._advance(DT)
 
     # ---- pedestrians ----------------------------------------------------
+    #
+    # Both escort modes move robot and person along one shared polyline
+    # ``track`` (planned by sim.routing), each tracked by its arclength, so the
+    # trailing party retraces the leader's collision-free path instead of
+    # cutting corners toward it.
 
-    def walk_person(self, p: SimPerson, to_xy: Tuple[float, float],
-                    robot_follows: bool = False, robot_leads: bool = False) -> None:
-        """Move ``p`` to ``to_xy``; optionally the robot trails or leads.
-
-        ``robot_follows`` -> follow_person_until: the person walks, the robot
-        keeps ``FOLLOW_GAP`` behind. ``robot_leads`` -> guide_person_to: the
-        robot drives and the person trails it.
-        """
+    def follow_person(self, p: SimPerson, track: Sequence[Tuple[float, float]],
+                      person_from: float) -> None:
+        """follow_person_until: ``p`` walks ``track`` from arclength
+        ``person_from`` to its end; the robot, starting at ``track[0]``, stays
+        ``FOLLOW_GAP`` behind along the same track."""
+        tr = _Track(track)
+        sp, sr = person_from, 0.0
         while True:
-            px, py = self.person_xy(p)
-            rem = math.hypot(to_xy[0] - px, to_xy[1] - py)
-            if rem < PERSON_SPEED * DT:
+            sp = min(tr.length, sp + PERSON_SPEED * DT)
+            (px, py), ph = tr.at(sp)
+            self.set_person_xy(p, px, py, ph)
+            target = max(sr, sp - FOLLOW_GAP)
+            step = min(LIN_SPEED * DT, target - sr)
+            if sp >= tr.length and step <= EPS_M:
                 break
-            hx, hy = (to_xy[0] - px) / rem, (to_xy[1] - py) / rem
-            nx, ny = px + hx * PERSON_SPEED * DT, py + hy * PERSON_SPEED * DT
-            self.set_person_xy(p, nx, ny, math.atan2(hy, hx))
-            if robot_follows:
-                tx, ty = nx - hx * FOLLOW_GAP, ny - hy * FOLLOW_GAP
-                cx, cy = self.xy
-                d = math.hypot(tx - cx, ty - cy)
-                if d > 1e-6:
-                    step = min(LIN_SPEED * DT, d)
-                    self.set_pose(cx + (tx - cx) / d * step, cy + (ty - cy) / d * step,
-                                  math.atan2(hy, hx))
-                    self.distance_m += step
+            if step > 0.0:
+                sr += step
+                (rx, ry), rh = tr.at(sr)
+                self.set_pose(rx, ry, rh)
+                self.distance_m += step
             self._advance(DT)
 
-    def lead_person(self, p: SimPerson, to_xy: Tuple[float, float]) -> None:
-        """guide_person_to: the robot navigates, the person follows it."""
-        while True:
-            cx, cy = self.xy
-            rem = math.hypot(to_xy[0] - cx, to_xy[1] - cy)
-            if rem < LIN_SPEED * DT:
-                break
-            hx, hy = (to_xy[0] - cx) / rem, (to_xy[1] - cy) / rem
-            step = LIN_SPEED * DT
-            self.set_pose(cx + hx * step, cy + hy * step, math.atan2(hy, hx))
+    def lead_person(self, p: SimPerson, track: Sequence[Tuple[float, float]],
+                    robot_from: float) -> None:
+        """guide_person_to: the robot drives ``track`` from arclength
+        ``robot_from`` to its end; ``p``, starting at ``track[0]``, trails
+        ``FOLLOW_GAP`` behind along the same track."""
+        tr = _Track(track)
+        sr, sp = robot_from, 0.0
+        while sr < tr.length - EPS_M:
+            step = min(LIN_SPEED * DT, tr.length - sr)
+            sr += step
+            (rx, ry), rh = tr.at(sr)
+            self.set_pose(rx, ry, rh)
             self.distance_m += step
-            px, py = self.person_xy(p)
-            tx, ty = cx - hx * FOLLOW_GAP, cy - hy * FOLLOW_GAP
-            dp = math.hypot(tx - px, ty - py)
-            if dp > 1e-6:
-                pstep = min(PERSON_SPEED * 1.6 * DT, dp)
-                self.set_person_xy(p, px + (tx - px) / dp * pstep, py + (ty - py) / dp * pstep,
-                                   math.atan2(hy, hx))
+            target = sr - FOLLOW_GAP
+            if target > sp:
+                sp = min(target, sp + PERSON_SPEED * 1.6 * DT)
+                (px, py), ph = tr.at(sp)
+                self.set_person_xy(p, px, py, ph)
             self._advance(DT)
+
+
+class _Track:
+    """A polyline addressed by arclength."""
+
+    def __init__(self, pts: Sequence[Tuple[float, float]]):
+        self.pts = [tuple(pts[0])]
+        for q in pts[1:]:
+            if math.hypot(q[0] - self.pts[-1][0], q[1] - self.pts[-1][1]) > 1e-9:
+                self.pts.append(tuple(q))
+        self.cum = [0.0]
+        for a, b in zip(self.pts, self.pts[1:]):
+            self.cum.append(self.cum[-1] + math.hypot(b[0] - a[0], b[1] - a[1]))
+        self.length = self.cum[-1]
+
+    def at(self, s: float) -> Tuple[Tuple[float, float], float]:
+        """Point and heading at arclength ``s`` (clamped to the ends)."""
+        if len(self.pts) == 1:
+            return self.pts[0], 0.0
+        s = min(max(s, 0.0), self.length)
+        i = max(0, min(bisect.bisect_right(self.cum, s) - 1, len(self.pts) - 2))
+        (ax, ay), (bx, by) = self.pts[i], self.pts[i + 1]
+        seg = self.cum[i + 1] - self.cum[i]
+        a = 0.0 if seg <= 0.0 else (s - self.cum[i]) / seg
+        return (ax + (bx - ax) * a, ay + (by - ay) * a), math.atan2(by - ay, bx - ax)

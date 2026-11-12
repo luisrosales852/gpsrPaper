@@ -15,6 +15,9 @@ Two properties make the run evidence rather than decoration:
 * **Timeouts are enforced in sim-time by the handler**, via ``robot.deadline``
   and ``timeouts.timeout_for`` — mirroring the real subtask managers rather than
   relying on py_trees' between-tick ``Timeout`` decorator.
+
+Every movement is planned by ``sim.routing`` (the stand-in for Nav2): paths go
+around furniture and around people other than the one being escorted.
 """
 
 import math
@@ -23,11 +26,13 @@ from typing import Any, Dict, List, Optional, Tuple
 from gpsr_merger.status import Status
 from gpsr_merger.timeouts import timeout_for
 from sim.robot import SimRobot, SimTimeout
+from sim.routing import Router, VisGraphRouter, path_length
 from sim.world import SimObject, SimPerson, World
 
 SENSE_RADIUS = 3.2      # m — perception range for find/count/visual-info
 REACH_RADIUS = 2.4      # m — the robot must be at the object's location to pick
 HANDOVER_RADIUS = 2.6   # m — a person must be close to receive an object
+PICK_STANDOFF = 0.55    # m — how close the base gets to an object it picks
 
 # Sim-seconds each non-navigation leaf takes. Chosen under the corresponding
 # budgets in gpsr_merger/timeouts.py so a nominal run never trips a timeout.
@@ -52,9 +57,11 @@ def _f(command: Any, field: str, default=None):
 
 class SimSubtaskHandler:
     def __init__(self, world: World, robot: SimRobot, recorder=None,
-                 failures: Optional[Dict[str, List[Status]]] = None):
+                 failures: Optional[Dict[str, List[Status]]] = None,
+                 router: Optional[Router] = None):
         self.world = world
         self.robot = robot
+        self.router = router if router is not None else VisGraphRouter(world)
         self.recorder = recorder
         self.failures = dict(failures or {})
         self.current = None              # PlanAction, set by on_action_start
@@ -131,6 +138,13 @@ class SimSubtaskHandler:
     def _face(self, xy) -> None:
         self.robot.turn_to(math.atan2(xy[1] - self.robot.xy[1], xy[0] - self.robot.xy[0]))
 
+    def _path(self, start, goal, exclude: Optional[SimPerson] = None):
+        """Collision-free waypoints ``start`` -> ``goal`` given where everyone
+        (except ``exclude``) is standing right now; ``None`` if unreachable."""
+        self.router.set_people([self.robot.person_xy(p) for p in self.world.people
+                                if p is not exclude])
+        return self.router.plan_path(start, goal)
+
     def _say(self, text: str, anchor: Optional[str] = None, hold: float = 2.2) -> None:
         self.robot.speech = text
         self.robot.speech_anchor = anchor
@@ -160,7 +174,11 @@ class SimSubtaskHandler:
             if pose is None:
                 self.robot.idle(0.5)
                 return self._end(Status.TARGET_NOT_FOUND, None)
-            self.robot.drive_to(pose[0], pose[1], yaw=pose[2])
+            path = self._path(self.robot.xy, pose[:2])
+            if path is None:
+                self.robot.idle(0.5)
+                return self._end(Status.EXECUTION_ERROR, None)
+            self.robot.drive_path(path, yaw=pose[2])
             return self._end(Status.EXECUTION_SUCCESS, name)
         return self._run("go_to", body)
 
@@ -178,8 +196,16 @@ class SimSubtaskHandler:
             if not self._near(oxyz[:2], REACH_RADIUS):
                 self.robot.idle(0.5)
                 return self._end(Status.TARGET_NOT_FOUND, None)
-            self._face(oxyz[:2])
-            self.robot.drive_to(oxyz[0], oxyz[1], stop_within=0.55)
+            (ox, oy), (rx, ry) = oxyz[:2], self.robot.xy
+            d = math.hypot(rx - ox, ry - oy)
+            if d > PICK_STANDOFF:
+                # Stand off on the robot's side of the object; the router moves
+                # that point out of the furniture the object sits on.
+                k = PICK_STANDOFF / d
+                path = self._path((rx, ry), (ox + (rx - ox) * k, oy + (ry - oy) * k))
+                if path is None:
+                    return self._end(Status.EXECUTION_ERROR, None)
+                self.robot.drive_path(path)
             self._face(oxyz[:2])
             self.robot.grasp(obj)
             self.robot.idle(DURATION["pick_object"] * 0.4)
@@ -268,7 +294,16 @@ class SimSubtaskHandler:
                 return self._end(Status.TARGET_NOT_FOUND, None)
             self.robot.highlight_person(person, True)
             self._say(f"Following you to the {dest}.", anchor="robot", hold=1.2)
-            self.robot.walk_person(person, (pose[0], pose[1]), robot_follows=True)
+            # The person walks their own route; the robot first drives to where
+            # they stood, then retraces that route behind them.
+            start = self.robot.person_xy(person)
+            reach = self._path(self.robot.xy, start, exclude=person)
+            walk = self._path(start, pose[:2], exclude=person)
+            if reach is None or walk is None:
+                return self._end(Status.EXECUTION_ERROR, None)
+            lead_in = [self.robot.xy] + reach[:-1] + [start]
+            self.robot.follow_person(person, lead_in + walk,
+                                     person_from=path_length(lead_in[0], lead_in[1:]))
             return self._end(Status.EXECUTION_SUCCESS, dest)
         return self._run("follow_person_until", body)
 
@@ -282,7 +317,16 @@ class SimSubtaskHandler:
                 return self._end(Status.TARGET_NOT_FOUND, None)
             self.robot.highlight_person(person, True)
             self._say(f"Please follow me to the {dest}.", anchor="robot", hold=1.2)
-            self.robot.lead_person(person, (pose[0], pose[1]))
+            # The person first walks to where the robot is, then retraces the
+            # robot's route behind it.
+            start = self.robot.person_xy(person)
+            drive = self._path(self.robot.xy, pose[:2], exclude=person)
+            join = self._path(start, self.robot.xy, exclude=person)
+            if drive is None or join is None:
+                return self._end(Status.EXECUTION_ERROR, None)
+            lead_in = [start] + join[:-1] + [self.robot.xy]
+            self.robot.lead_person(person, lead_in + drive,
+                                   robot_from=path_length(lead_in[0], lead_in[1:]))
             return self._end(Status.EXECUTION_SUCCESS, dest)
         return self._run("guide_person_to", body)
 

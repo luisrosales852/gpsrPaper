@@ -1,0 +1,686 @@
+\documentclass[conference]{IEEEtran}
+
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{xcolor}
+\usepackage{url}
+
+% ---------------------------------------------------------------------------
+% Placeholder macros. Set \finaltrue to hide all of them in a submission build.
+% ---------------------------------------------------------------------------
+\newif\iffinal \finalfalse
+\iffinal
+  \newcommand{\todo}[1]{}
+  \newcommand{\X}{}
+\else
+  \newcommand{\todo}[1]{\textcolor{red}{[TODO: #1]}}
+  \newcommand{\X}{\textcolor{red}{XX}}
+\fi
+\newcommand{\figph}[2]{%
+  \fbox{\parbox[c][#1][c]{0.95\linewidth}{\centering\small\textcolor{red}{#2}}}}
+
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\pre}{\prec}
+\newcommand{\one}{\mathbf{1}}
+\newtheorem{proposition}{Proposition}
+\newtheorem{remark}{Remark}
+
+\begin{document}
+
+\title{Interleaving Multiple Spoken Commands\\for Service Robots under Execution Failure}
+
+\author{
+\IEEEauthorblockN{\todo{Author 1}, \todo{Author 2}, \todo{Author 3}}
+\IEEEauthorblockA{\todo{Affiliation}\\
+\todo{email}}
+}
+
+\maketitle
+
+\begin{abstract}
+Service robots are increasingly asked to accept several instructions at once
+and decide for themselves how to carry them out. The RoboCup@Home General
+Purpose Service Robot (GPSR) test rewards this explicitly: a robot that
+receives three commands together and executes them in an interleaved order
+earns a bonus. Interleaving reduces travel, but it also changes what the robot
+carries, when, and which information is available when it answers a question.
+We present a planner that merges commands parsed by a language model into a
+single plan, using a dependency analysis to decide which parts of different
+commands may be reordered and an exact dynamic program over per-command
+progress to minimize expected execution time under a single-gripper
+constraint. When an action fails, the robot replans from its current state
+instead of restarting each command. We also introduce GPSR-Sim, a benchmark
+built from the official command generator, with \X{} home layouts, stochastic
+skill models and success checks on the final world state. Across \X{} command
+batches, the planner reduces task time by \X\% relative to one-by-one
+execution and by \X\% relative to back-to-back execution, while \X{} answer
+errors caused by naive interleaving are eliminated. \todo{Robot result
+sentence from RoboCup 2026.}
+\end{abstract}
+
+\begin{IEEEkeywords}
+task planning, service robots, RoboCup@Home, behaviour trees, language models
+\end{IEEEkeywords}
+
+% ===========================================================================
+\section{Introduction}
+% ===========================================================================
+
+Domestic service robots are usually evaluated one instruction at a time. In
+practice, people give several requests together (``bring me a drink, then
+tell me how many people are in the kitchen, and put the book back on the
+shelf''), and the robot must decide in what order to do them. The
+RoboCup@Home GPSR test~\cite{rulebook} formalizes this setting. The robot
+receives three commands, chooses whether to hear them one at a time or all at
+once, and receives a 200-point bonus if it completes them in an interleaved
+order that saves time or motion. Commands are produced by an official
+generator~\cite{cmdgen} and rephrased by a language model before being spoken,
+so the robot must also parse free-form speech.
+
+Ordering several commands so as to minimize travel resembles a
+pickup-and-delivery routing problem~\cite{savelsbergh1995,frederickson1978},
+and for three commands the search space is small. The difficulty lies
+elsewhere. First, commands are not independent. A command that moves an
+object can change the answer to another command that inspects it, and
+results stored for one command can be read by another if the executor does not
+keep them apart. In our earlier competition system, using sequential commands caused the
+robot to report \todo{N} incorrect answers in \todo{M} simulated batches
+(Section~\ref{sec:exp}). Second, skills fail. A missed detection in the middle
+of an interleaved plan leaves the robot holding an object for another command,
+and a recovery strategy that restarts commands in their original order can
+violate the same constraints the planner was designed to respect. Third, the
+quantity that matters is the score obtained within a time limit, not the
+distance driven.
+
+\todo{Thing is that before it was purely sequential (Luis)}
+
+This paper makes the following contributions:
+\begin{itemize}
+  \item A formulation of multi-command interleaving in which parsed commands
+    are segmented, annotated with the state they read and write, and combined
+    under a partial order that only permits reordering of non-interfering
+    segments (Section~\ref{sec:problem}).
+  \item A dynamic program over per-command progress vectors, whose state
+    space grows with $\prod_c (L_c+1)$ rather than $2^M$, with a proof that it
+    is exact for any objective made of per-step costs, and extensions to the
+    interleaving bonus and the time limit (Section~\ref{sec:method}).
+  \item A replanning executor that resumes from the robot's current pose and
+    gripper state after a failure, and an exact formulation of the problem with
+    failures as an acyclic Markov decision process, which we use to measure
+    how far replanning is from the best achievable policy
+    (Section~\ref{sec:mdp}).
+  \item GPSR-Sim, an open benchmark of command batches drawn from the official
+    generator, executed in \X{} home layouts with stochastic skill outcomes
+    and judged on the final world state (Section~\ref{sec:bench}).
+  \item An evaluation against one-by-one execution, back-to-back execution,
+    greedy ordering, a classical planner and a language-model planner, plus
+    results from the RoboCup 2026 competition (Section~\ref{sec:exp}).
+\end{itemize}
+\todo{Add a teaser figure: merged vs.\ sequential trajectories with a Gantt bar per command.}
+
+% ===========================================================================
+\section{Related Work}
+% ===========================================================================
+
+\subsection{Language models for robot task planning}
+Language models are now widely used to turn instructions into robot plans,
+either by scoring skills against affordances~\cite{saycan}, by generating
+programs~\cite{progprompt}, or by translating goals into PDDL for a classical
+planner~\cite{llmp}. Behaviour trees have also been generated directly by
+language models~\cite{btgenbot}. These systems typically handle one
+instruction at a time. \todo{Add work on multi-instruction or multi-goal
+LLM planning, if any is found.}
+
+\subsection{Routing with precedence and capacity}
+Visiting a set of locations with pickups that must precede deliveries and a
+vehicle that carries one item at a time is the stacker crane
+problem~\cite{frederickson1978}, a special case of the general
+pickup-and-delivery problem~\cite{savelsbergh1995}. Exact dynamic programming
+for sequencing problems dates back to Held and Karp~\cite{heldkarp1962}. We
+use this literature for the travel component and focus on the parts it does
+not model: interference between commands and execution failures.
+
+\subsection{RoboCup@Home and embodied benchmarks}
+Recent GPSR systems use foundation models for parsing and
+planning~\cite{nimbro2024,gpsrfm2023,prompteng2024}, but to our knowledge none
+evaluates interleaved execution of several commands. Embodied planning
+benchmarks such as PARTNR~\cite{partnr} and EmbodiedBench~\cite{embodiedbench},
+built on simulators such as Habitat~3.0~\cite{habitat3}, evaluate long-horizon
+plans but not the competition setting, where commands arrive by speech,
+execution is timed, and partial credit is awarded. \todo{Check for RoboCup@Home
+simulation league work (e.g.\ SIGVerse / DSPL simulator) and cite.}
+
+% ===========================================================================
+\section{Problem Formulation}\label{sec:problem}
+% ===========================================================================
+
+\subsection{Commands and segments}
+A batch consists of $n$ commands. A language-model parser~\todo{cite or
+describe BAML schema} turns command $c$ into a sequence of actions
+$a_{c,1},\dots,a_{c,L'_c}$ drawn from a fixed set of $K=13$ skills
+(Table~\ref{tab:skills}). We split each sequence into \emph{segments}: a segment
+starts with a \code{go\_to} and contains every action up to the next
+\code{go\_to}. Command $c$ then has segments $s_{c,1},\dots,s_{c,L_c}$. Each
+segment has an entry location $e(s)$, the target of its \code{go\_to}, and an
+exit location $x(s)$, which equals $e(s)$ unless the segment contains a
+\code{guide\_person\_to} or \code{follow\_person\_until}, in which case it is
+that action's destination. A segment with no leading \code{go\_to} is attached
+to the preceding segment of the same command, or to the robot's position when
+the command was given.
+
+\begin{table}[t]
+\centering
+\caption{Skills produced by the parser and their state effects.}
+\label{tab:skills}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lll}
+\toprule
+Skill & Reads & Writes \\
+\midrule
+\code{go\_to} & -- & robot pose \\
+\code{pick\_object} & object pose & gripper, object pose \\
+\code{place\_object}, \code{give\_object} & gripper & gripper, object pose \\
+\code{find\_person}, \code{find\_person\_by\_name} & person pose & attention \\
+\code{get\_person\_info} & attention & register$_c$ \\
+\code{count}, \code{get\_visual\_info} & object poses & register$_c$ \\
+\code{follow\_person\_until}, \code{guide\_person\_to} & attention & pose, person pose \\
+\code{answer\_question} & -- & -- \\
+\code{say\_with\_context} & register$_c$ & -- \\
+\bottomrule
+\end{tabular}}
+\todo{Verify read/write sets against the skill implementations.}
+\end{table}
+
+\subsection{Interference between commands}
+Each action $a$ has a read set $R(a)$ and a write set $W(a)$ over state
+variables: the gripper, the person currently attended to, a result register
+per command, and the pose of each object and person mentioned in the batch.
+For a segment, $R(s)$ and $W(s)$ are the unions over its actions. Two segments
+$s$ and $s'$ from different commands \emph{interfere} if
+\begin{equation}
+W(s)\cap\big(R(s')\cup W(s')\big)\neq\emptyset
+\;\;\text{or}\;\;
+W(s')\cap R(s)\neq\emptyset .
+\end{equation}
+Result registers are indexed by command, so information-gathering actions of
+different commands never interfere through them. The gripper is handled
+separately below. We define the partial order $\pre$ as the transitive closure
+of (i) $s_{c,j}\pre s_{c,j+1}$ for every command, and (ii) $s\pre s'$ for every
+interfering pair, oriented by the order in which the commands were issued.
+\todo{Discuss whether issue order is the right default, or whether the operator
+should be asked.}
+
+\subsection{Feasible schedules}
+A schedule $\pi$ is a linear extension of $\pre$ over all segments. It is
+feasible if it respects the gripper capacity: whenever command $c$ holds an
+object, the next segment must belong to $c$ or must not contain a gripper
+action. Holding is determined by the last gripper action executed, so a segment
+of the form \code{place}, \code{pick} ends holding.
+
+\subsection{Objective}
+Let $d(\cdot,\cdot)$ be the path length on the map, $v$ the nominal speed and
+$\tau(s)$ the expected duration of the non-navigation actions in $s$. Each
+navigation also has a fixed overhead $\kappa$ (stowing the arm, announcing the
+destination), which is paid only when the robot actually has to move. The
+expected task time is
+\begin{equation}
+T(\pi)=\sum_{i=1}^{M}\frac{d\big(x(\pi_{i-1}),e(\pi_i)\big)}{v}
++\kappa\,\one\big[e(\pi_i)\neq x(\pi_{i-1})\big]+\tau(\pi_i),
+\end{equation}
+with $x(\pi_0)=p_0$ the robot's pose when planning starts. Our competition
+system removed consecutive \code{go\_to}s to the same place after planning;
+including $\kappa$ in the cost lets the planner account for that saving
+instead.
+
+Minimizing $T$ ignores risk. We also penalize the time spent carrying an
+object, since a failure while holding is the costliest kind. Let $h_{i-1}$
+denote the command holding the gripper before step $i$ (or $\varnothing$). The
+holding time accumulated in step $i$ is
+$\one[h_{i-1}\neq\varnothing]\,d(x(\pi_{i-1}),e(\pi_i))/v+\rho(\pi_i,h_{i-1})$,
+where $\rho(s,h)$ is the time spent holding inside segment $s$, which depends
+only on $s$ and on whether an object is held when $s$ starts. The objective is
+the sum of per-step costs
+\begin{equation}\label{eq:stage}
+J(\pi)=\sum_{i=1}^{M} g\big(x(\pi_{i-1}),h_{i-1},\pi_i\big),
+\end{equation}
+\begin{multline*}
+g(x,h,s)=\Big(1+\lambda\one[h\neq\varnothing]\Big)\frac{d(x,e(s))}{v}
++\kappa\,\one[e(s)\neq x]\\+\tau(s)+\lambda\rho(s,h),
+\end{multline*}
+where $\lambda$ trades time against exposure to failure while holding. Writing
+$J$ as a sum of costs that depend only on the current pose, the gripper holder
+and the next segment is what makes the dynamic program in
+Section~\ref{sec:method} exact (Proposition~\ref{prop:exact}).
+\todo{Derive $\lambda$ from the score sheet if possible, or select it on a
+held-out set of batches.}
+
+% ===========================================================================
+\section{Method}\label{sec:method}
+% ===========================================================================
+
+\subsection{Dynamic program over progress vectors}
+Because segments of one command are totally ordered, the set of segments
+executed so far is fully determined by the vector
+$\mathbf{k}=(k_1,\dots,k_n)$, where $k_c$ is the number of segments of command
+$c$ already executed. A state is a pair $(\mathbf{k},\ell)$, where $\ell$ is
+the command that executed the last segment. We add a virtual start state
+$(\mathbf{0},0)$ whose pose is $p_0$, and write $x(\mathbf{k},\ell)$ for the
+robot's pose in state $(\mathbf{k},\ell)$, i.e.\ $x(s_{\ell,k_\ell})$, or $p_0$
+in the start state. The gripper holder $h(\mathbf{k})$ and the set
+$E(\mathbf{k})$ of commands whose next segment has all its $\pre$-predecessors
+executed and is allowed by the gripper rule are functions of $\mathbf{k}$
+alone. The cost-to-go satisfies
+\begin{equation}\label{eq:bellman}
+V(\mathbf{k},\ell)=\min_{c\in E(\mathbf{k})}
+\Big[g\big(x(\mathbf{k},\ell),h(\mathbf{k}),s_{c,k_c+1}\big)
++V(\mathbf{k}+\mathbf{e}_c,c)\Big],
+\end{equation}
+with $V(\mathbf{L},\cdot)=0$ for $\mathbf{L}=(L_1,\dots,L_n)$. The number of
+states is at most $1+n\prod_c(L_c+1)$ and each has at most $n$ successors, so
+the running time is $O(n^2\prod_c(L_c+1))$. For a GPSR batch ($n=3$,
+$L_c\le4$) this is at most $3\cdot5^3=375$ states. Algorithm~\ref{alg:dp}
+gives the procedure.
+
+\begin{proposition}\label{prop:exact}
+For any objective of the form~\eqref{eq:stage}, the recursion~\eqref{eq:bellman}
+evaluated at $(\mathbf{0},0)$ returns the minimum of $J$ over all feasible
+schedules, and following its minimizers yields an optimal schedule.
+\end{proposition}
+
+\begin{IEEEproof}[Proof sketch]
+Given $(\mathbf{k},\ell)$, the executed segments are exactly
+$\{s_{c,j}: j\le k_c\}$, so the remaining segments, the eligible set
+$E(\mathbf{k})$ and the gripper holder are determined. The holder is
+determined because each command's gripper state after its first $k_c$ segments
+is fixed, and the capacity constraint allows at most one holder. The robot's
+pose is $x(\mathbf{k},\ell)$. The set of feasible completions from a state and
+the cost of each completion therefore depend only on $(\mathbf{k},\ell)$, not on
+how the state was reached. This is the principle of optimality, so an optimal
+schedule restricted to its suffix from any state is optimal for that state, and
+\eqref{eq:bellman} holds. Every transition increases $\sum_c k_c$ by one, so the
+state graph is acyclic. Since $\mathbf{k}+\mathbf{e}_c$ is lexicographically
+larger than $\mathbf{k}$, processing states in reverse lexicographic order
+evaluates every successor before its predecessors, and a single backward pass
+computes $V$ exactly.
+\end{IEEEproof}
+
+\begin{remark}
+Optimality is relative to the model in two ways. Segments are treated as atomic,
+so schedules that execute another command's actions in the middle of a segment
+are not considered. Same-location segments of different commands are still
+grouped when that helps, since moving between them costs nothing. The result
+also holds only for the cost model: a cost that the planner does not see, such
+as the navigation overhead $\kappa$ when it is omitted, can make the computed
+schedule suboptimal on the robot.
+\end{remark}
+
+\subsection{Objectives that are not additive}
+Two quantities in the GPSR score sheet do not decompose into per-step costs.
+Both can be handled by adding a variable to the state, after which
+Proposition~\ref{prop:exact} applies to the larger state space.
+
+\emph{Interleaving bonus.} The bonus depends on whether the schedule
+interleaved commands at all. We add a bit $b$ that becomes 1 when a segment of
+command $c$ is executed while another command $c'$ has
+$0<k_{c'}<L_{c'}$, and subtract the bonus $B$ from the terminal cost when
+$b=1$. This doubles the number of states. \todo{Check with the technical
+committee what counts as ``meaningful'' interleaving.}
+
+\emph{Time limit.} The test ends after $T_{\max}=420$\,s. Maximizing the
+probability of finishing, or the expected score when unfinished commands earn
+nothing, depends on the total elapsed time rather than a sum of costs. We add
+the elapsed time $t$, discretized at resolution $\Delta$, to the state. With
+$\Delta=1$\,s this multiplies the state count by at most $T_{\max}/\Delta=420$,
+which gives about $3.2\times10^5$ states for a GPSR batch with the bonus bit.
+\todo{Measure solve time; consider a coarser $\Delta$.}
+
+\begin{algorithm}[t]
+\caption{Interleaving by progress-vector DP}\label{alg:dp}
+\begin{algorithmic}[1]
+\Require segments $s_{c,j}$, order $\pre$, start pose $p_0$, gripper state $g_0$
+\State $V(\mathbf{L},\ell)\gets 0$ for all $\ell$ \Comment{$\mathbf{L}=(L_1,\dots,L_n)$}
+\For{$\mathbf{k}\neq\mathbf{L}$ in reverse lexicographic order}
+  \State $\Lambda\gets\{0\}$ \textbf{if} $\mathbf{k}=\mathbf{0}$ \textbf{else} $\{\ell: k_\ell\ge1\}$
+  \State $h\gets\textsc{Holder}(\mathbf{k},g_0)$
+  \For{$\ell\in\Lambda$}
+    \State $V(\mathbf{k},\ell)\gets\infty$;\; $x\gets x(\mathbf{k},\ell)$
+    \For{$c$ with $k_c<L_c$}
+      \State $s\gets s_{c,k_c+1}$
+      \If{\textsc{PredsDone}$(s,\mathbf{k})$ \textbf{and} \textsc{GripperOK}$(s,h)$}
+        \State $q\gets g(x,h,s)+V(\mathbf{k}+\mathbf{e}_c,c)$
+        \If{$q<V(\mathbf{k},\ell)$}
+          \State $V(\mathbf{k},\ell)\gets q$;\; $\mu(\mathbf{k},\ell)\gets c$
+        \EndIf
+      \EndIf
+    \EndFor
+  \EndFor
+\EndFor
+\State \Return schedule obtained by following $\mu$ from $(\mathbf{0},0)$
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Execution and replanning}
+The plan is executed as a behaviour tree~\todo{cite py\_trees}. Each action is
+a leaf that calls the corresponding skill. Leaves report \code{RUNNING} while a
+skill is active, so timeouts are checked during execution.
+\todo{Implement non-blocking leaves; the current leaves block.}
+Failures are handled according to the type of action:
+\begin{itemize}
+  \item \emph{Information actions} (\code{count}, \code{get\_visual\_info},
+    \code{get\_person\_info}, \code{find\_person}) are retried once. If they
+    still fail, the result register records the failure, and the robot reports
+    it when the command's answer is due. The plan continues.
+  \item \emph{Manipulation actions} that fail remove the remaining segments of
+    their command that depend on the held object.
+  \item \emph{Navigation failures} mark the location as unreachable for the
+    rest of the batch.
+\end{itemize}
+After any change to the remaining segments, the DP is solved again from the
+current pose and gripper state. Since a solve takes \X{}\,ms for a GPSR batch,
+replanning does not add noticeable delay. \todo{Implement replanning; the
+current system falls back to running each command from the start.}
+
+\subsection{Optimality under failure}\label{sec:mdp}
+Replanning after each failure is a receding-horizon policy that plans as if
+no further failures will occur. It is not optimal for the stochastic problem.
+A policy that anticipates failures may, for example, run an uncertain
+perception step early to learn whether a command can be completed before
+spending travel on it, avoid picking up an object just before a segment that
+is likely to fail, or leave the least reliable command for last.
+
+For GPSR batches the stochastic problem can be solved exactly. Retries within
+a segment follow a fixed rule, so their effect is folded into the outcome
+probabilities of the segment. Executing segment $s$ then has three outcomes:
+success; an information failure, after which the segment ends and the command's
+answer is marked as failed; and a manipulation failure, after which the
+remaining segments of the command that depend on the object are dropped. The
+segments that depend on a held object are those up to its release, which
+directly follow the pick, so the dropped segments are contiguous and we model
+dropping by advancing $k_c$ past them. The remaining segments of each command
+are then still determined by $\mathbf{k}$. The state is $\sigma=(\mathbf{k},\ell,\mathbf{f},b)$, where
+$f_c\in\{\text{ok},\text{partial},\text{failed}\}$ records the status of
+command $c$ and $b$ is the interleaving bit. With $P(o\mid s,\sigma)$ the
+probability of outcome $o$ and $\sigma'_o$ the resulting state, the expected
+cost-to-go satisfies
+\begin{equation}\label{eq:mdp}
+V(\sigma)=\min_{c\in E(\sigma)}\Big[\bar g(\sigma,c)
++\sum_{o}P(o\mid s_{c,k_c+1},\sigma)\,V(\sigma'_o)\Big],
+\end{equation}
+where $\bar g$ is the expected per-step cost, and the terminal cost is
+$-\beta\,\mathrm{Score}(\mathbf{f},b)$ with $\beta$ converting points into
+seconds. Every outcome increases $\sum_c k_c$, so this Markov decision process
+is acyclic, and backward induction in reverse lexicographic order of
+$\mathbf{k}$ solves it exactly, as in Proposition~\ref{prop:exact}. For a GPSR
+batch the state space has at most $375\cdot3^3\cdot2\approx2\times10^4$ states.
+Adding elapsed time for the deadline multiplies this by $T_{\max}/\Delta$.
+
+We use the solution of~\eqref{eq:mdp} in two ways: as an upper bound on what
+any policy can achieve under the skill models of GPSR-Sim, which measures how
+much replanning loses (Section~\ref{sec:gap}), and as a candidate policy for
+the robot. \todo{Implement; decide whether the exact policy replaces replanning
+on the robot depending on the size of the gap.}
+
+The formulation still assumes that the locations named in a command are
+correct. A person who is not where the command says, or an object that has
+been moved, makes the problem partially observable, and an optimal policy
+would plan over beliefs about where things are. We do not model this; the
+planner acts on the locations given by the parser, and failures to find a
+target are captured only through the outcome probabilities.
+\todo{Note navigation failures: marking a location unreachable changes the
+distance function, which the state above does not represent; these are
+handled by replanning only.}
+
+\subsection{Implementation}
+The planner is a dependency-free Python module, and the executor uses
+py\_trees. Both run on the robot inside a ROS~2 node. Skill implementations
+are resolved by name, so the same planner and executor run unchanged in
+simulation and on the robot. \todo{Robot platform description and figure.}
+
+% ===========================================================================
+\section{GPSR-Sim Benchmark}\label{sec:bench}
+% ===========================================================================
+
+\subsection{Command batches}
+Each batch contains three commands sampled from the official
+generator~\cite{cmdgen}. Following the rulebook, each command is rephrased by a
+language model up to three times. \todo{Fix the rephrasing model and prompt.}
+The generator's structured output provides the ground-truth goal for each
+command. \todo{Number of batches; train/test split if any parser tuning is done.}
+
+\subsection{Environments}
+We use \X{} apartment layouts with interior walls, furniture and the standard
+@Home location and object categories. \todo{Choose source: hand-built arenas,
+HSSD scenes via Habitat, or both.} Distances used by the planner are path
+lengths computed on the layout's occupancy grid.
+
+\subsection{Skill models}
+Each skill succeeds with probability $p_k$ and takes a duration drawn from a
+distribution fitted to logs from the robot. \todo{Collect logs and fit
+$p_k$ and duration distributions per skill.} People and objects can be absent
+from where the command places them with probability \X.
+
+\subsection{Evaluation}
+A command counts as solved if the final world state satisfies its goal: the
+object is at the requested place or with the requested person, the person has
+been guided to the requested room, or the answer given to the operator matches
+the ground truth. Status codes returned by skills are not used for scoring.
+Each batch is scored with the GPSR score sheet, including partial credit and
+the interleaving bonus.
+
+\subsection{Fidelity tiers}
+The abstract simulator runs a batch in about \X{}\,s, which allows thousands
+of trials. A subset of \X{} batches is also run in \todo{Gazebo / Isaac Sim}
+with the full ROS~2 navigation stack to check that conclusions carry over.
+
+% ===========================================================================
+\section{Experiments}\label{sec:exp}
+% ===========================================================================
+
+\subsection{Baselines}
+\begin{itemize}
+  \item \textbf{One-by-one}: the robot hears and executes each command
+    separately, returning to the operator in between, as allowed by the rules.
+  \item \textbf{Back-to-back}: all three commands are heard first and executed
+    in the order given.
+  \item \textbf{Greedy}: at each step the nearest eligible segment is chosen.
+  \item \textbf{PDDL}: the parsed goals are given to Fast
+    Downward~\cite{fastdownward} with a domain encoding of the skills.
+    \todo{Write the domain.}
+  \item \textbf{LLM merge}: a language model is given the three parsed plans
+    and asked for a merged plan. \todo{Model and prompt.}
+  \item \textbf{Ours (travel only)}: the DP without the dependency analysis
+    or replanning, corresponding to our competition system.
+  \item \textbf{Ours (full)}: dependency analysis, the cost~\eqref{eq:stage}
+    and replanning after failures.
+  \item \textbf{Ours (exact MDP)}: the policy from~\eqref{eq:mdp}. Under the
+    simulator's skill models no policy can do better in expectation, so this
+    serves as an upper bound.
+\end{itemize}
+
+\subsection{Metrics}
+We report the GPSR score, the fraction of commands solved, the fraction of
+batches that meet the bonus conditions, task time, distance, and the number of
+constraint violations observed during execution (two objects held, an action
+executed before its prerequisite, or an answer drawn from another command).
+
+\subsection{Main results}
+\begin{table*}[t]
+\centering
+\caption{Results on GPSR-Sim (\X{} batches, \X{} layouts). Mean $\pm$ s.d.}
+\label{tab:main}
+\begin{tabular}{lcccccc}
+\toprule
+Method & Score & Solved (\%) & Bonus (\%) & Time (s) & Distance (m) & Violations \\
+\midrule
+One-by-one       & \X & \X & --  & \X & \X & \X \\
+Back-to-back     & \X & \X & 0   & \X & \X & \X \\
+Greedy           & \X & \X & \X  & \X & \X & \X \\
+PDDL             & \X & \X & \X  & \X & \X & \X \\
+LLM merge        & \X & \X & \X  & \X & \X & \X \\
+Ours (travel only) & \X & \X & \X & \X & \X & \X \\
+Ours (full)      & \X & \X & \X  & \X & \X & \X \\
+Ours (exact MDP) & \X & \X & \X  & \X & \X & \X \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\todo{Describe Table~\ref{tab:main} once results are in.}
+
+\subsection{Robustness to skill failure}
+\begin{figure}[t]
+\centering
+\figph{4.2cm}{Placeholder: GPSR score vs.\ global skill failure rate
+(0--40\%) for each method.}
+\caption{Score as skill reliability decreases.}
+\label{fig:failure}
+\end{figure}
+
+Figure~\ref{fig:failure} varies all success probabilities $p_k$ together.
+\todo{Expected: travel-only interleaving degrades faster than one-by-one
+because of restarts; replanning should close the gap. Confirm.}
+
+\subsection{Gap to the optimal stochastic policy}\label{sec:gap}
+\begin{table}[t]
+\centering
+\caption{Expected score of replanning relative to the exact MDP policy.}
+\label{tab:gap}
+\small
+\begin{tabular}{lccc}
+\toprule
+Failure rate & Replanning & Exact MDP & Gap (\%) \\
+\midrule
+0\%  & \X & \X & \X \\
+10\% & \X & \X & \X \\
+20\% & \X & \X & \X \\
+40\% & \X & \X & \X \\
+\bottomrule
+\end{tabular}
+\end{table}
+Table~\ref{tab:gap} compares replanning with the exact policy
+of~\eqref{eq:mdp} at several failure rates. With no failures the two coincide,
+by Proposition~\ref{prop:exact}. \todo{If the gap stays small, this justifies
+replanning on the robot; if it grows with the failure rate, report which
+decisions the exact policy makes differently, e.g.\ ordering risky perception
+earlier.}
+
+\subsection{Ablations}
+\begin{table}[t]
+\centering
+\caption{Ablations of the full method.}
+\label{tab:ablation}
+\small
+\begin{tabular}{lccc}
+\toprule
+Variant & Score & Time (s) & Violations \\
+\midrule
+Full                            & \X & \X & \X \\
+-- dependency analysis          & \X & \X & \X \\
+-- replanning (restart) & \X & \X & \X \\
+-- gripper constraint           & \X & \X & \X \\
+-- exit locations               & \X & \X & \X \\
+$\kappa=0$ (no nav.\ overhead) & \X & \X & \X \\
+-- bonus bit                    & \X & \X & \X \\
+Euclidean distance & \X & \X & \X \\
+$\lambda=0$ (time only)         & \X & \X & \X \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Planner runtime}
+Table~\ref{tab:runtime} compares the progress-vector DP with a subset DP
+(Held-Karp over segments) on random batches of increasing size. Sizes beyond a
+GPSR batch are included to show scaling.
+\todo{Re-run on final implementation; current values are from a prototype.}
+
+\begin{table}[t]
+\centering
+\caption{Planner runtime on random batches.}
+\label{tab:runtime}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{rrrrr}
+\toprule
+$M$ & $n$ & Progress states & Subset states ($2^M$) & Time (s) \\
+\midrule
+12 & 4 & 256 & 4\,096 & 0.002 \\
+18 & 4 & 900 & 262\,144 & 0.007 \\
+22 & 5 & 4\,500 & $4.2\times10^{6}$ & 0.022 \\
+26 & 6 & 22\,500 & $6.7\times10^{7}$ & 0.30 \\
+32 & 8 & 390\,625 & $4.3\times10^{9}$ & 5.9 \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+\subsection{Where errors come from}
+\begin{table}[t]
+\centering
+\caption{Share of unsolved commands by first failing stage.}
+\label{tab:stages}
+\small
+\begin{tabular}{lcc}
+\toprule
+Stage & Ours (travel only) & Ours (full) \\
+\midrule
+Speech recognition & \X & \X \\
+Parsing            & \X & \X \\
+Merging            & \X & \X \\
+Execution          & \X & \X \\
+\bottomrule
+\end{tabular}
+\end{table}
+\todo{Annotate failures by stage; include the known case where the parser drops
+the first part of a command.}
+
+\subsection{Competition results}
+\todo{RoboCup 2026 GPSR runs: commands received, plans produced, points scored,
+whether the bonus was awarded, and failures observed. Include a photo or
+trajectory figure.}
+
+% ===========================================================================
+\section{Discussion and Limitations}
+% ===========================================================================
+The dependency analysis relies on the read and write sets of each skill being
+specified correctly, and on the parser naming the same object consistently
+across commands. Interference that the robot cannot observe, such as a person
+moving between rooms, is not modelled. The optimality results hold for the
+segment decomposition and the cost and skill models; they say nothing about
+errors in those models, and the exact policy of Section~\ref{sec:mdp} ignores
+uncertainty about where people and objects are. The skill models in GPSR-Sim
+are fitted to a single robot. \todo{Expand after results; mention whether the operator
+should be consulted when commands conflict.}
+
+% ===========================================================================
+\section{Conclusion}
+% ===========================================================================
+We presented a planner for executing several spoken commands as one
+interleaved plan, which accounts for interference between commands and
+recovers from skill failures by replanning. On GPSR-Sim it \todo{one-sentence
+result}. The benchmark, planner and simulator are available at \todo{URL}.
+
+\section*{Acknowledgment}
+\todo{Team, funding.}
+
+\begin{thebibliography}{99}
+\bibitem{rulebook} RoboCup@Home Technical Committee, ``RoboCup@Home rulebook,'' 2026. [Online]. Available: \url{https://github.com/RoboCupAtHome/RuleBook}
+\bibitem{cmdgen} RoboCup@Home, ``GPSR command generator.'' [Online]. Available: \url{https://github.com/RoboCupAtHome/CommandGenerator}
+\bibitem{saycan} M.~Ahn \emph{et al.}, ``Do as I can, not as I say: Grounding language in robotic affordances,'' arXiv:2204.01691, 2022.
+\bibitem{progprompt} I.~Singh \emph{et al.}, ``ProgPrompt: Generating situated robot task plans using large language models,'' in \emph{Proc.\ ICRA}, 2023.
+\bibitem{llmp} B.~Liu \emph{et al.}, ``LLM+P: Empowering large language models with optimal planning proficiency,'' arXiv:2304.11477, 2023.
+\bibitem{btgenbot} R.~A.~Izzo, G.~Bardaro, and M.~Matteucci, ``BTGenBot: Behavior tree generation for robotic tasks with lightweight LLMs,'' arXiv:2403.12761, 2024.
+\bibitem{frederickson1978} G.~N.~Frederickson, M.~S.~Hecht, and C.~E.~Kim, ``Approximation algorithms for some routing problems,'' \emph{SIAM J.\ Comput.}, vol.~7, no.~2, pp.~178--193, 1978.
+\bibitem{savelsbergh1995} M.~W.~P.~Savelsbergh and M.~Sol, ``The general pickup and delivery problem,'' \emph{Transp.\ Sci.}, vol.~29, no.~1, pp.~17--29, 1995.
+\bibitem{heldkarp1962} M.~Held and R.~M.~Karp, ``A dynamic programming approach to sequencing problems,'' \emph{J.\ SIAM}, vol.~10, no.~1, pp.~196--210, 1962.
+\bibitem{nimbro2024} R.~Memmesheimer \emph{et al.}, ``RoboCup@Home 2024 OPL winner NimbRo: Anthropomorphic service robots using foundation models for perception and planning,'' arXiv:2412.14989, 2024.
+\bibitem{gpsrfm2023} \todo{authors}, ``Foundation model based open vocabulary task planning and executive system for general purpose service robots,'' arXiv:2308.03357, 2023.
+\bibitem{prompteng2024} \todo{authors}, ``A comparison of prompt engineering techniques for task planning and execution in service robotics,'' arXiv:2410.22997, 2024.
+\bibitem{partnr} M.~Chang \emph{et al.}, ``PARTNR: A benchmark for planning and reasoning in embodied multi-agent tasks,'' arXiv:2411.00081, 2024.
+\bibitem{embodiedbench} R.~Yang \emph{et al.}, ``EmbodiedBench: Comprehensive benchmarking multi-modal large language models for vision-driven embodied agents,'' arXiv:2502.09560, 2025.
+\bibitem{habitat3} X.~Puig \emph{et al.}, ``Habitat 3.0: A co-habitat for humans, avatars and robots,'' arXiv:2310.13724, 2023.
+\bibitem{fastdownward} M.~Helmert, ``The Fast Downward planning system,'' \emph{J.\ Artif.\ Intell.\ Res.}, vol.~26, pp.~191--246, 2006.
+\end{thebibliography}
+
+\end{document}

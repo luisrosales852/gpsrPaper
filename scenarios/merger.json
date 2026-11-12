@@ -1685,5 +1685,139 @@
       "per_command_order": true,
       "non_goto_preserved": true
     }
+  },
+  {
+    "name": "custom_distance_wall_reorders",
+    "comment": "A, B, C are collinear, so Euclidean visits A->B->C. A wall between A and B makes that hop cost 10; the pluggable distance must reroute to A->C->B.",
+    "commands": [
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "A"
+        },
+        {
+          "action": "count",
+          "target_to_count": "cups"
+        }
+      ],
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "B"
+        },
+        {
+          "action": "count",
+          "target_to_count": "cups"
+        }
+      ],
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "C"
+        },
+        {
+          "action": "count",
+          "target_to_count": "cups"
+        }
+      ]
+    ],
+    "coords": {
+      "A": [
+        0,
+        0
+      ],
+      "B": [
+        1,
+        0
+      ],
+      "C": [
+        2,
+        0
+      ]
+    },
+    "origin": null,
+    "distance_overrides": [
+      [
+        "A",
+        "B",
+        10.0
+      ]
+    ],
+    "expect": {
+      "go_to_order": [
+        "A",
+        "C",
+        "B"
+      ],
+      "non_goto_preserved": true,
+      "per_command_order": true
+    }
+  },
+  {
+    "name": "custom_distance_unreachable_is_large_m",
+    "comment": "An unreachable pair (null -> inf) is clamped to LARGE_M like an unknown location: the plan still covers every command and avoids that hop.",
+    "commands": [
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "A"
+        },
+        {
+          "action": "count",
+          "target_to_count": "cups"
+        }
+      ],
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "B"
+        },
+        {
+          "action": "count",
+          "target_to_count": "cups"
+        }
+      ],
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "C"
+        },
+        {
+          "action": "count",
+          "target_to_count": "cups"
+        }
+      ]
+    ],
+    "coords": {
+      "A": [
+        0,
+        0
+      ],
+      "B": [
+        1,
+        0
+      ],
+      "C": [
+        2,
+        0
+      ]
+    },
+    "origin": null,
+    "distance_overrides": [
+      [
+        "A",
+        "B",
+        null
+      ]
+    ],
+    "expect": {
+      "go_to_order": [
+        "A",
+        "C",
+        "B"
+      ],
+      "non_goto_preserved": true,
+      "per_command_order": true
+    }
   }
 ]

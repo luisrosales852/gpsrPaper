@@ -16,6 +16,7 @@ from tests._merger_helpers import (  # noqa: E402
     build_commands,
     describe_plan,
     evaluate_expectations,
+    make_distance,
     make_locator,
 )
 
@@ -35,6 +36,10 @@ def main() -> int:
             kwargs["locator"] = make_locator(sc["coords"])
         if "origin" in sc:
             kwargs["origin"] = tuple(sc["origin"]) if sc["origin"] is not None else None
+        if "distance_overrides" in sc:
+            kwargs["distance"] = make_distance(
+                sc.get("coords", {}), sc["distance_overrides"], kwargs.get("origin")
+            )
 
         plan = None
         try:

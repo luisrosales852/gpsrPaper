@@ -11,6 +11,7 @@ Runs headless (no rendering), so it is fast enough for CI:
     .venv/bin/python -m tests.test_sim_run      # same checks, no pytest needed
 """
 
+import math
 import os
 import sys
 import tempfile
@@ -19,7 +20,10 @@ from argparse import Namespace
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from gpsr_merger.timeouts import GLOBAL_BUDGET_S  # noqa: E402
+from sim.routing import (  # noqa: E402
+    PERSON_RADIUS, ROBOT_RADIUS, VisGraphRouter, furniture_rects)
 from sim.run_sim import load_scenario, run_once  # noqa: E402
+from sim.world import World  # noqa: E402
 
 ALL_KINDS = {
     "go_to", "pick_object", "place_object", "give_object", "find_person",
@@ -28,24 +32,34 @@ ALL_KINDS = {
     "say_with_context",
 }
 
+APARTMENT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                         "sim", "apartment.json")
+# Every run the collision tests sweep: both showcases, both orderings, plus one
+# with an injected failure so the fallback branch's movements are covered too.
+COLLISION_RUNS = [(sc, mode, None) for sc in ("showcase_all_leaves", "showcase_merge")
+                  for mode in ("merged", "sequential")] + [
+                  ("showcase_all_leaves", "merged", ("pick_object:1", "0.3:3"))]
+# Slack for trail sampling (TRAIL_DT at cruise speed is ~4 cm, and the planner
+# keeps MARGIN_M / PERSON_MARGIN_M on top of the true footprint).
+_TOL = 1e-3
+
 _cache = {}
 
 
-def _args(out):
-    return Namespace(apartment=os.path.join(os.path.dirname(os.path.dirname(
-        os.path.abspath(__file__))), "sim", "apartment.json"),
+def _args(out, fail=None):
+    return Namespace(apartment=APARTMENT,
         width=920, height=720, fps=30, speed=2.5, camera="topdown",
-        retries=2, budget=GLOBAL_BUDGET_S, fail=None, no_video=True,
+        retries=2, budget=GLOBAL_BUDGET_S, fail=list(fail) if fail else None, no_video=True,
         print_tree=False, out=out)
 
 
-def run(mode, scenario="showcase_all_leaves"):
-    """One headless run per (scenario, mode), memoised across tests."""
-    key = (scenario, mode)
+def run(mode, scenario="showcase_all_leaves", fail=None):
+    """One headless run per (scenario, mode, fail), memoised across tests."""
+    key = (scenario, mode, fail)
     if key not in _cache:
         sc = load_scenario(scenario)
         with tempfile.TemporaryDirectory() as td:
-            summary = run_once(sc, mode, os.path.join(td, mode), _args(td))
+            summary = run_once(sc, mode, os.path.join(td, mode), _args(td, fail))
             import json
             with open(os.path.join(td, mode, "run.json")) as f:
                 _cache[key] = (summary, json.load(f), sc)
@@ -117,7 +131,7 @@ def test_merged_travels_less_than_sequential():
 def test_showcase_merge_finishes_sooner():
     """The demo scenario must earn its place: same actions, all succeed, and the
     merged run is clearly faster end-to-end — not just shorter on paper.
-    Measured: ~28% less time, ~43% less driving."""
+    Measured with collision-free routing: ~26% less time, ~39% less driving."""
     m, _, _ = run("merged", "showcase_merge")
     s, _, _ = run("sequential", "showcase_merge")
     for x in (m, s):
@@ -128,9 +142,9 @@ def test_showcase_merge_finishes_sooner():
 
 
 def test_cost_model_gap_is_attributable_to_non_goto_displacement():
-    """The planner's Euclidean model only accounts for ``go_to`` hops, so any gap
-    between planned cost and driven distance must come from leaves that move the
-    robot without being a ``go_to`` — follow/guide, and the pick stand-off."""
+    """The planner's path-length model only accounts for ``go_to`` hops, so any
+    gap between planned cost and driven distance must come from leaves that move
+    the robot without being a ``go_to`` — follow/guide, and the pick stand-off."""
     summary, log, _ = run("merged")
     ev = log["events"]
     non_goto = 0.0
@@ -143,6 +157,62 @@ def test_cost_model_gap_is_attributable_to_non_goto_displacement():
     kinds = {e["kind"] for s, e in zip(ev[0::2], ev[1::2])
              if e["distance_m"] - s["distance_m"] > 0.01 and e["kind"] != "go_to"}
     assert kinds <= {"follow_person_until", "guide_person_to", "pick_object"}, kinds
+
+
+def test_planned_cost_is_the_driven_metric():
+    """``run_sim`` hands the router's path length to ``merge(distance=...)``, so
+    when only ``go_to`` moves the robot, what the planner minimised is what the
+    robot drove. showcase_merge has no follow/guide; the residue is the pick
+    stand-off only."""
+    for mode in ("merged", "sequential"):
+        s, _, _ = run(mode, "showcase_merge")
+        assert abs(s["cost_model_gap_m"]) < 0.02 * s["actual_distance_m"], (
+            mode, s["cost_model_gap_m"], s["actual_distance_m"])
+
+
+def test_every_location_is_in_free_space():
+    """No named location may sit inside furniture, a wall or a person's
+    footprint (people at their spawn positions) — otherwise the router would
+    silently move the goal."""
+    world = World(APARTMENT)
+    router = VisGraphRouter(world, [p.home for p in world.people])
+    bad = {k: v[:2] for k, v in world.locations.items() if router.free_point(v[:2]) != v[:2]}
+    assert not bad, f"locations inside an obstacle: {bad}"
+
+
+def _rect_gap(x, y, r):
+    dx = max(r.x0 - x, 0.0, x - r.x1)
+    dy = max(r.y0 - y, 0.0, y - r.y1)
+    return math.hypot(dx, dy)
+
+
+def test_robot_never_overlaps_furniture_or_walls():
+    """Every trail sample keeps the robot's whole footprint (ROBOT_RADIUS, no
+    safety margin) off every piece of furniture and inside the walls."""
+    world = World(APARTMENT)
+    rects = furniture_rects(world.furniture)
+    (bx0, by0), (bx1, by1) = world.bounds
+    for sc, mode, fail in COLLISION_RUNS:
+        _, log, _ = run(mode, sc, fail)
+        for i, (x, y, _c) in enumerate(log["trail"]):
+            wall = min(x - bx0, bx1 - x, y - by0, by1 - y)
+            assert wall >= ROBOT_RADIUS - _TOL, (sc, mode, fail, i, (x, y), "wall", wall)
+            for r, f in zip(rects, world.furniture):
+                g = _rect_gap(x, y, r)
+                assert g >= ROBOT_RADIUS - _TOL, (sc, mode, fail, i, (x, y), f["name"], g)
+
+
+def test_robot_keeps_clear_of_people():
+    """Robot and person footprints never overlap, escorted person included."""
+    world = World(APARTMENT)
+    for sc, mode, fail in COLLISION_RUNS:
+        _, log, _ = run(mode, sc, fail)
+        assert len(log["people_trail"]) == len(log["trail"])
+        for i, ((x, y, _c), people) in enumerate(zip(log["trail"], log["people_trail"])):
+            for p, (px, py) in zip(world.people, people):
+                d = math.hypot(x - px, y - py)
+                assert d >= ROBOT_RADIUS + PERSON_RADIUS - _TOL, (
+                    sc, mode, fail, i, (x, y), p.name, round(d, 3))
 
 
 if __name__ == "__main__":
