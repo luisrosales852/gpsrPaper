@@ -30,7 +30,7 @@ Corollaries:
 ## Commands
 
 ```bash
-python3 run_scenarios.py          # merger smoke test — expect 27/27
+python3 run_scenarios.py          # merger smoke test — expect 29/29
 python3 run_scenarios.py -v       # also print the merged ordering per scenario
 
 # Simulation (needs the venv; Python 3.14)
@@ -41,7 +41,7 @@ python3.14 -m venv .venv
 .venv/bin/python -m sim.run_sim --mode both --no-video    # event log only, ~0.1 s
 .venv/bin/python -m sim.run_sim --mode both               # -> out/side_by_side.{mp4,png}, ~1 min
 .venv/bin/python -m sim.run_sim --scenario showcase_all_leaves   # 13-leaf coverage run
-.venv/bin/pytest tests/test_sim_run.py -q                 # 8 tests, headless, <1 s
+.venv/bin/pytest tests/test_sim_run.py -q                 # 12 tests, headless, <1 s
 .venv/bin/python -m tests.test_sim_run                    # same checks without pytest
 ```
 
@@ -67,9 +67,9 @@ gpsr_merger/           THE CONTRIBUTION — no third-party deps except py_trees 
   leaf_behaviours.py   ActionLeaf, SequentialFallbackLeaf, OneShotCallbackLeaf
   timeouts.py          per-action budgets + GLOBAL_BUDGET_S (300 s)
   status.py            vendored 11-line Status enum
-scenarios/merger.json  27 declarative scheduler scenarios (commands + coords + expect)
+scenarios/merger.json  29 declarative scheduler scenarios (commands + coords + expect)
 tests/_merger_helpers.py  invariant checkers, BAML stand-in builder, expect-evaluator
-tests/test_sim_run.py     7 assertions on a real headless sim run
+tests/test_sim_run.py     12 tests on real headless sim runs (incl. collision checks)
 sim/                   MuJoCo apartment; consumer of the contribution
 reference/             the real ROS node, untouched
 out/                   generated videos + run.json + comparison.json (gitignored)
@@ -77,12 +77,12 @@ out/                   generated videos + run.json + comparison.json (gitignored
 
 ### merger.py
 
-`merge(commands, locator=None, origin=None) -> InterleavedPlan`
+`merge(commands, locator=None, origin=None, distance=None) -> InterleavedPlan`
 
 1. `_decompose` each command into **go_to-led segments**.
-2. Held-Karp DP (`_optimal_schedule`) over segments, minimising 2-D Euclidean
-   travel, with two-part eligibility: per-command prefix order, and a
-   gripper-state check (only `neutral` segments may interleave while another
+2. Held-Karp DP (`_optimal_schedule`) over segments, minimising travel (2-D
+   Euclidean by default, or the caller's `distance(from_name, to_name)`), with two-part
+   eligibility: per-command prefix order, and a gripper-state check (only `neutral` segments may interleave while another
    command holds the gripper).
 3. Flatten back to `PlanAction`s, then `_collapse_redundant_go_tos`.
 
@@ -101,6 +101,15 @@ Things that will bite you:
   unknown. Scenarios cover both.
 - Everything reaches command objects through `getattr`, so plain
   `SimpleNamespace` stand-ins work. That duck-typing is load-bearing.
+- **`distance=` is the only metric hook.** `merge(..., distance=fn)` replaces
+  `_euclidean`. It takes location **names**, `fn(from_name | None, to_name)`, where
+  `None` is the robot origin (only asked when `origin` is not None) — the same
+  signature as home2's `GPSRTM._path_cost`, which answers from a Nav2 path-length
+  matrix. `_cost_matrix` calls it once per distinct location pair *before* the DP
+  (never inside the O(2^M · M²) loop) and maps `None` or a non-finite
+  (unreachable) cost to `LARGE_M`. The merger never learns about obstacles.
+  Scenarios express it with `distance_overrides: [[name_a, name_b, cost|null]]`
+  (see `tests/_merger_helpers.make_distance`).
 - `plan.fallback` is the per-command original sequence — the sim reuses it
   verbatim as the sequential baseline, so no separate baseline scheduler exists.
 
@@ -134,24 +143,30 @@ Selector "gpsr_root" (memory)
 
 | file | role |
 |---|---|
-| `apartment.json` | open-plan floor plan: bounds, zones, furniture, 19 locations, 8 objects, 3 people — data only |
-| `scenarios_visual.json` | `showcase_merge` (**default, the demo**): 4 commands that each zig-zag north↔south, so ordering matters — merged is ~28% faster / ~43% less driving. `showcase_all_leaves`: 4 commands whose union hits all 13 leaf kinds (coverage; the 7 original tests use it, and it saves only ~3% so it is a poor demo) |
+| `apartment.json` | open-plan floor plan: bounds, zones, furniture, 19 locations, 8 objects, 3 people — data only. Every location must be in free space (tested) |
+| `routing/` | **all navigation lives here, never in `gpsr_merger/`** (Nav2 owns it on the robot). `base.Router` protocol (`set_people`, `free_point`, `plan_path`, `distance`); `obstacles.py` inflates furniture and people rects by `ROBOT_RADIUS` (0.364 m, from the mjcf footprint) + margin; `visgraph.VisGraphRouter` = visibility graph + Dijkstra, exact and deterministic. A grid/A* router can be added later behind the same protocol |
+| `scenarios_visual.json` | `showcase_merge` (**default, the demo**): 4 commands that each zig-zag north↔south, so ordering matters — merged is ~26% faster / ~39% less driving. `showcase_all_leaves`: 4 commands whose union hits all 13 leaf kinds (coverage; the 7 original tests use it, and it saves only ~4–8% so it is a poor demo) |
 | `world.py` | loads the apartment; `World.locator` is the merger-facing contract (mirrors `GPSRTM._resolve_xy`, returns `None` for unknown) |
 | `mjcf.py` | apartment JSON → MuJoCo MJCF string |
-| `robot.py` | kinematic base, gripper, pedestrians; raises `SimTimeout` past `deadline` |
-| `handlers.py` | `SimSubtaskHandler` — the 13 leaf implementations |
+| `robot.py` | kinematic base, gripper, pedestrians; raises `SimTimeout` past `deadline`. `drive_path` drives router waypoints; `follow_person`/`lead_person` move robot and person along one shared track |
+| `handlers.py` | `SimSubtaskHandler` — the 13 leaf implementations; every movement goes through `self._path` (router, with the escorted person excluded) |
 | `recorder.py` | frames → ffmpeg; writes the event log to `run.json` |
 | `overlay.py` | PIL HUD, colour-by-source-command |
 | `compose.py` | `--mode both` only: decodes both `run.mp4`s, crops their HUD panels and composes the 1920×1080 race video — per-pane clock/distance/current action, a Gantt timeline on a shared time axis (command colour; half shade = `go_to`), finish stamps, end card. Also writes `side_by_side.png` (clean final still) and `side_by_side_endcard.png` |
 | `run_sim.py` | CLI: merged / sequential / both; writes `comparison.json` |
 
-The apartment is **open-plan on purpose**: the robot drives straight lines, so
-driven distance is directly comparable to `merger._euclidean`. Do not add
-interior walls or a path planner without saying so loudly — it would break the
-metric equivalence the paper leans on.
+The robot never drives straight through things: handlers get every path from
+`sim.routing`, and `run_sim` builds a *planning* router (people at home) whose
+`distance` goes to `merge(distance=...)` (wrapped by name in `merger_distance`)
+and to `planned_cost`, plus a separate
+*execution* router on the handler (people where they currently stand). Planned and
+driven distance are therefore the same metric. Adding interior walls is fine now
+(add them as rects to the router's obstacles). Swapping the router for a
+non-shortest-path planner would break the metric equivalence the paper leans on.
 
 `out/{merged,sequential}/run.json` holds `summary`, `events`, `waypoints`,
-`trail`, `labels` and `frames` (`[t, distance_m]` per captured video frame — how
+`trail`, `people_trail` (every person's `[x, y]` at each trail sample, same
+index), `labels` and `frames` (`[t, distance_m]` per captured video frame — how
 `compose.py` syncs the panes). `summary.task_time_s` is the last action's end;
 `sim_time_s` also includes the 1.2 s idle hold, so compare `task_time_s`.
 `comparison.json` carries `saved_m`/`saved_pct` and `time_saved_s`/`time_saved_pct`.
@@ -175,6 +190,11 @@ by name in the paper:
 `test_merged_travels_less_than_sequential` and
 `test_cost_model_gap_is_attributable_to_non_goto_displacement` (the planner only
 models `go_to` hops, so the gap must come from follow/guide/pick stand-off).
+Navigation evidence, all read from the event log:
+`test_every_location_is_in_free_space`, `test_robot_never_overlaps_furniture_or_walls`,
+`test_robot_keeps_clear_of_people` (these sweep `COLLISION_RUNS`: both showcases,
+both orderings, and one run with injected failures) and
+`test_planned_cost_is_the_driven_metric`.
 
 **Adding a merger scenario:** append an object to `scenarios/merger.json` with
 `commands`, optional `coords` / `origin`, and an `expect` block. Every key in

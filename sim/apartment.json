@@ -1,6 +1,6 @@
 {
   "name": "open_plan_loft",
-  "comment": "Open-plan: outer walls + furniture islands only, no interior doors. Straight-line travel therefore equals the merger's Euclidean cost model (merger._euclidean), so simulated distance is directly comparable to planned cost.",
+  "comment": "Open-plan: outer walls + furniture islands only, no interior doors. The robot navigates with sim/routing (visibility graph around furniture and people, inflated by its footprint), and run_sim passes the same path length to merge(distance=...), so simulated distance is directly comparable to planned cost. Every location must lie in free space (checked by tests/test_sim_run.py).",
   "bounds": [
     [
       -7.0,
@@ -267,8 +267,8 @@
       1.5708
     ],
     "lobby": [
-      0.0,
-      -4.0,
+      0.4,
+      -3.2,
       1.5708
     ],
     "exit": [
@@ -283,7 +283,7 @@
     ],
     "counter": [
       5.5,
-      3.6,
+      3.5,
       1.5708
     ],
     "dishwasher": [
@@ -312,7 +312,7 @@
       1.5708
     ],
     "bedroom": [
-      -5.0,
+      -3.9,
       2.5,
       3.1416
     ],

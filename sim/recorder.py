@@ -49,6 +49,9 @@ class Recorder:
 
         self.labels = [[action_label(a) for a in cmd] for cmd in commands]
         self.trail: List[Tuple[float, float, int]] = []
+        # Where every person stood at each trail sample (same index), so tests
+        # can check robot-person clearance from the log alone.
+        self.people_trail: List[List[Tuple[float, float]]] = []
         self.waypoints: List[Dict[str, Any]] = []
         self.events: List[Dict[str, Any]] = []
         self.done: Dict[Tuple[int, int], bool] = {}
@@ -131,6 +134,7 @@ class Recorder:
             self._next_trail = robot.t + TRAIL_DT
             x, y = robot.xy
             self.trail.append((x, y, self.current[0] if self.current else 0))
+            self.people_trail.append([robot.person_xy(p) for p in self.world.people])
 
         if self._renderer is None or self._proc is None or robot.t < self._next_capture:
             return
@@ -214,5 +218,7 @@ class Recorder:
                 "labels": self.labels,
                 "frames": self.frame_log,
                 "trail": [[round(x, 3), round(y, 3), c] for x, y, c in self.trail],
+                "people_trail": [[[round(x, 3), round(y, 3)] for x, y in ps]
+                                 for ps in self.people_trail],
             }, f, indent=1)
         return path

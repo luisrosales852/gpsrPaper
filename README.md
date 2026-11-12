@@ -25,7 +25,7 @@ run_scenarios.py      smoke test: runs all 27 scenarios
 ## Running
 
 ```bash
-python3 run_scenarios.py       # 27/27 expected
+python3 run_scenarios.py       # 29/29 expected
 python3 run_scenarios.py -v    # also print the merged ordering per scenario
 ```
 
@@ -93,10 +93,11 @@ the same world, with only the ordering changed.
 | file | role |
 |---|---|
 | `apartment.json` | open-plan floor plan, locations, objects, people — data only |
+| `routing/` | obstacle-aware navigation (the sim's stand-in for Nav2): visibility graph around furniture and people, behind a small `Router` protocol |
 | `scenarios_visual.json` | `showcase_merge` (the demo, default) and `showcase_all_leaves` (all 13 leaf kinds) |
 | `world.py` | loads the apartment; exposes the `locator` the merger needs |
 | `mjcf.py` | apartment JSON → MuJoCo MJCF |
-| `robot.py` | kinematic base, gripper, pedestrians |
+| `robot.py` | kinematic base, gripper, pedestrians; drives the waypoints `routing/` plans |
 | `handlers.py` | `SimSubtaskHandler` — the 13 leaf behaviours |
 | `recorder.py` | frames → ffmpeg, plus the event log written to `run.json` |
 | `overlay.py` | PIL HUD; colour-by-source-command |
@@ -112,14 +113,14 @@ once. Measured in the sim, with all 17 actions succeeding in both runs:
 
 | | time | driven |
 |---|---|---|
-| merged | 113.6 s | 33.0 m |
-| sequential | 158.4 s | 57.6 m |
-| saved | **44.7 s (28%)** | **24.6 m (43%)** |
+| merged | 119.1 s | 35.4 m |
+| sequential | 161.6 s | 58.4 m |
+| saved | **42.4 s (26%)** | **23.0 m (39%)** |
 
 Time saved is smaller in relative terms than distance, because perception and
 manipulation take the same time in both orderings. The merger only removes
 driving. `showcase_all_leaves` shows why the scenario matters: its commands are
-already local, so merging saves only ~3%. That run exists for leaf coverage, not
+already local, so merging saves only ~4–8%. That run exists for leaf coverage, not
 as a demo.
 
 `out/side_by_side.mp4` shows both runs on one clock, with a Gantt timeline
@@ -137,20 +138,35 @@ Two properties make a run evidence rather than decoration:
   decorator only checks between ticks and the leaves block, so faking a wall-clock
   abort would misrepresent where enforcement actually lives.
 
-Because the apartment is open-plan and the robot drives straight lines, distance
-driven equals the Euclidean cost `merger._euclidean` optimises — verified: a drive to
-`kitchen` covers 5.280152 m against a planned 5.280152 m. Planner and simulator are
-measured in the same units, with no metric mismatch to argue about.
+**The robot does not drive through things.** `sim/routing/` plans every movement
+on a visibility graph: furniture and standing people are grown by the robot's
+footprint radius (0.364 m, plus a 5 cm margin), and Dijkstra over the obstacle
+corners gives the exact shortest collision-free path. Follow and guide move robot
+and person along one shared route. `tests/test_sim_run.py` checks this from the
+event log: no trail sample puts the footprint inside furniture, a wall or a person
+(both showcases, both orderings, and a run with injected failures). A straight-line
+driver fails those tests.
+
+**Planner and simulator use the same metric.** `merge()` takes an optional
+`distance=` travel-cost function (default: Euclidean, which is what the robot uses).
+`run_sim` passes the router's path length, so the DP ranks orderings by the distance
+the robot will actually drive. In `showcase_merge` the planned cost is within 0.25 m
+of the driven distance, and that residue is the pick stand-off. The merger never
+sees obstacles, only a cost between two named locations. On the robot the same hook
+is fed by Nav2: `GPSRTM._path_cost` answers from a path-length matrix computed in
+one `/navigation/query_path_matrix` call.
+`scenarios/merger.json` pins the hook: `custom_distance_wall_reorders` puts a wall
+between two collinear locations and checks that the order changes.
 
 ### Scope of the simulation
 
-Only `showcase_merge` and `showcase_all_leaves` are fully provisioned. The 27 scenarios in
+Only `showcase_merge` and `showcase_all_leaves` are fully provisioned. The 29 scenarios in
 `scenarios/merger.json` are unit tests *for the scheduler*: they reference locations
 like `A`/`loc7` and people like `Jane` that the apartment does not contain, so their
 perception leaves correctly report `TARGET_NOT_FOUND` and the tree drops to the
-fallback branch. 13 of the 27 have every `go_to` resolvable, but rendering the rest
-meaningfully would mean populating the apartment to match each one. `run_scenarios.py`
-remains the check that matters for the merger itself, and still passes 27/27.
+fallback branch. 13 of the 27 original ones have every `go_to` resolvable, but rendering
+the rest meaningfully would mean populating the apartment to match each one.
+`run_scenarios.py` remains the check that matters for the merger itself, and passes 29/29.
 
 ## Still to write
 

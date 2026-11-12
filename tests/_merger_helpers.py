@@ -115,6 +115,31 @@ def make_locator(coords: dict):
     return lambda name: table.get(name)
 
 
+def make_distance(coords: dict, overrides: Sequence[Sequence[Any]], origin=None):
+    """Build a ``merge(distance=...)`` function over location names: Euclidean
+    on ``coords``, except for the symmetric ``[name_a, name_b, cost]`` pairs in
+    ``overrides`` (``cost`` of ``null`` means unreachable). Models e.g. a wall
+    between two locations that are close in a straight line. ``"origin"`` names
+    the robot start (``None`` from the merger) when the scenario sets one."""
+    xy = {k: tuple(v) for k, v in coords.items()}
+    table = {}
+    for x, y, cost in overrides:
+        c = float("inf") if cost is None else float(cost)
+        table[(x, y)] = table[(y, x)] = c
+
+    def distance(a, b):
+        key = ("origin" if a is None else a, b)
+        if key in table:
+            return table[key]
+        pa = origin if a is None else xy.get(a)
+        pb = xy.get(b)
+        if pa is None or pb is None:
+            return None
+        return ((pa[0] - pb[0]) ** 2 + (pa[1] - pb[1]) ** 2) ** 0.5
+
+    return distance
+
+
 def _go_tos(plan: InterleavedPlan) -> List[PlanAction]:
     return [pa for pa in plan.actions if getattr(pa.action, "action", "") == "go_to"]
 
