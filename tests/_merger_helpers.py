@@ -91,8 +91,7 @@ def gripper_walk_strict(plan_actions: Iterable[PlanAction]) -> bool:
 
 
 def action_effects_by_source(commands: Sequence[Any]) -> dict:
-    """``{(cmd, idx): (reads, writes)}`` for every action, walking each command
-    in its original order so each action is tagged at the place it happens."""
+    """``{(cmd, idx): (reads, writes)}`` for every action."""
     out = {}
     for c, command in enumerate(commands):
         here = None
@@ -104,14 +103,8 @@ def action_effects_by_source(commands: Sequence[Any]) -> dict:
 
 def conflict_order_preserved(plan_actions: Sequence[PlanAction], commands: Sequence[Any],
                              room_of=None) -> bool:
-    """Every pair of actions of different commands that conflict (one writes a
-    variable the other reads or writes, at the same place or one place inside
-    the other) appears in the order the commands were issued. Equivalent to:
-    the merged plan is conflict-equivalent to running the commands one by one.
-
-    Re-derives the conflicts at *action* level from the plan itself, so it
-    checks the scheduler's segment-level dependency table independently.
-    """
+    """Conflicting actions of different commands run in issue order
+    (checked per action, independently of the merger's segment table)."""
     effects = action_effects_by_source(commands)
 
     def room(place):
@@ -128,10 +121,10 @@ def conflict_order_preserved(plan_actions: Sequence[PlanAction], commands: Seque
         ri, wi = effects[(ci, ai)]
         for cj, aj in seq[i + 1:]:
             if cj >= ci:
-                continue  # same command, or already in issue order
+                continue
             rj, wj = effects[(cj, aj)]
             if clash(wi, rj | wj) or clash(wj, ri):
-                return False  # a later-issued command's action ran first
+                return False
     return True
 
 
@@ -186,7 +179,6 @@ def make_distance(coords: dict, overrides: Sequence[Sequence[Any]], origin=None)
 
 
 def make_room_of(rooms: dict):
-    """``merge(room_of=...)`` from a ``{place: room}`` map; others -> None."""
     return lambda name: rooms.get(name)
 
 
@@ -367,7 +359,6 @@ def evaluate_expectations(
         fail("non_goto_preserved")
     if expect.get("fallback_preserves_all") and not fallback_preserves_all(plan, commands):
         fail("fallback_preserves_all")
-    # [[cmd_a, idx_a], [cmd_b, idx_b]]: action (cmd_a, idx_a) runs before (cmd_b, idx_b).
     pos = {(pa.source_cmd, pa.source_idx): i for i, pa in enumerate(A)}
     for (ca, ia), (cb, ib) in expect.get("action_before", []):
         if (ca, ia) not in pos or (cb, ib) not in pos or pos[(ca, ia)] > pos[(cb, ib)]:

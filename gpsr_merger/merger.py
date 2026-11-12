@@ -7,10 +7,7 @@ order that:
 
   * preserves intra-command sequencing,
   * keeps the gripper invariant (one item at a time, drop before pick),
-  * keeps every pair of *conflicting* segments of different commands in the
-    order the commands were given (one writes state at a place the other
-    reads or writes), so the merged plan is conflict-equivalent to running
-    the commands one by one: same answers and world effects, less travel,
+  * keeps conflicting segments of different commands in issue order,
   * minimizes travel between locations (2-D Euclidean by default, or any
     caller-supplied ``distance`` such as a planner's path length) using a
     precedence-constrained
@@ -23,12 +20,10 @@ Pipeline:
   1. Decompose each command into go_to-led segments.
   2. DP over progress vectors k = (k_0, ..., k_{n-1}), k_c = how many of
      command c's segments are done, with two-part eligibility:
-       - per-command prefix order (implicit: command c can only advance to
-         its next segment, k_c + 1),
+       - per-command prefix order (implicit in k),
        - gripper-state check (only neutral segments may interleave while
          another command is mid-block),
-       - cross-command dependencies (a segment that conflicts with a segment
-         of an earlier-issued command waits until that segment is done).
+       - cross-command dependencies (see _build_needs).
   3. Walk the schedule back into a flat PlanAction list, then collapse
      consecutive same-location go_tos.
 
@@ -47,12 +42,7 @@ _GRIPPER_RELEASES = frozenset({"give_object", "place_object"})
 # locations unless the per-command prefix forces them into a slot.
 LARGE_M = 1000.0
 
-# Cap on the DP state count, n * prod(L_c + 1), before we fall back to
-# per-command sequential. Each state has at most n successors, so this bounds
-# the work at ~n * _STATE_CAP edge relaxations (sub-second in CPython). A GPSR
-# batch (3 commands, <= 4 segments each) is at most 3 * 5^3 = 375 states; the
-# cap only triggers for batches of many one- or two-segment commands, where
-# prod(L_c + 1) approaches 2^M.
+# Max DP states (n * prod(L_c + 1)) before falling back to sequential.
 _STATE_CAP = 200_000
 
 # Tiebreaker weight: tiny per-cross-command-switch penalty so equal-cost
@@ -83,13 +73,9 @@ Locator = Callable[[str], Optional[Tuple[float, float]]]
 # (from_location or None for the robot origin, to_location) -> meters, or None
 # if unknown. A non-finite return (unreachable) also costs LARGE_M.
 DistanceFn = Callable[[Optional[str], str], Optional[float]]
-# location name -> the room that contains it (e.g. "couch" -> "living room"),
-# or None if unknown / the name is itself a room. Lets a room-level reference
-# ("count the people in the living room") conflict with a spot inside it
-# ("guide the person from the couch"). On the robot: query_location(name).area.
+# location name -> containing room ("couch" -> "living room"), or None.
 RoomFn = Callable[[str], Optional[str]]
-# A shared state variable: (domain, place), e.g. ("objects", "kitchen table").
-_Var = Tuple[str, Optional[str]]
+_Var = Tuple[str, Optional[str]]  # (domain, place)
 
 
 @dataclass
@@ -101,7 +87,6 @@ class _Segment:
     # (True = held, False = empty); None if it has no gripper action,
     # i.e. the segment is gripper-neutral.
     ends_holding: Optional[bool] = None
-    # Shared state the segment reads / writes; see _annotate_effects.
     reads: FrozenSet[_Var] = frozenset()
     writes: FrozenSet[_Var] = frozenset()
 
@@ -148,46 +133,27 @@ def _decompose(cmd_idx: int, command: Any) -> List[_Segment]:
     return segments
 
 
-# ---------------------------------------------------------------------------
-# Cross-command dependencies: what each action reads and writes
-# ---------------------------------------------------------------------------
-# A state variable is (domain, location): "the objects at L" or "the people at
-# L". Variables are keyed by *location*, not by object or person name, because
-# the parser does not name things consistently across commands ("cup" / "cups"
-# / "drinks", "Jane" / "the person in red"), while every action has a location.
-# This over-approximates: counting apples and picking a cup at the same table
-# get ordered although they don't really conflict. A false dependency only
-# costs travel; a missed one costs a wrong answer.
-#
-# Two places overlap if they are the same place or one contains the other
-# (see RoomFn): GPSR commands mix room-level references ("count the people in
-# the living room", "find a cup in the kitchen") with placement / beacon ones
-# ("guide Jane from the couch", "count the drinks on the kitchen table").
-# Two different spots in the same room do not overlap.
-# Location None (no go_to yet, or a follow with no destination) overlaps every
-# location.
+# State is keyed by place, not by name: the parser names objects and people
+# inconsistently across commands, but every action has a place. A place None
+# (unknown) overlaps every place.
 _OBJECTS = "objects"
 _PEOPLE = "people"
 
-# kind -> (domains read at the current location, domains written there).
-# Kinds not listed (go_to, answer_question, say_with_context) touch no shared
-# state: go_to only moves the robot, which is exactly what reordering changes,
-# and the other two use only their own command's results.
+# kind -> (domains read, domains written) at the current place.
+# Unlisted kinds touch no shared state.
 _EFFECTS = {
     "pick_object": ({_OBJECTS}, {_OBJECTS}),
     "place_object": (set(), {_OBJECTS}),
     "give_object": ({_PEOPLE}, set()),
-    "count": ({_OBJECTS, _PEOPLE}, set()),  # can count people too
+    "count": ({_OBJECTS, _PEOPLE}, set()),
     "get_visual_info": ({_OBJECTS}, set()),
     "find_person": ({_PEOPLE}, set()),
     "find_person_by_name": ({_PEOPLE}, set()),
     "get_person_info": ({_PEOPLE}, set()),
-    # Escorts: the person leaves `here` (written here) and also arrives at the
-    # destination (written there, see _action_effects); the robot moves with them.
+    # Escorts also write the destination; see _action_effects.
     "follow_person_until": ({_PEOPLE}, {_PEOPLE}),
     "guide_person_to": ({_PEOPLE}, {_PEOPLE}),
 }
-# Escort kind -> the attribute naming its destination.
 _ESCORT_DESTINATION = {
     "follow_person_until": "destination",
     "guide_person_to": "destination_room",
@@ -195,7 +161,6 @@ _ESCORT_DESTINATION = {
 
 
 def _norm_location(loc: Any) -> Optional[str]:
-    """Canonical location name, so "Living_Room " and "living room" match."""
     if not isinstance(loc, str):
         return None
     loc = loc.strip().lower().replace("_", " ")
@@ -203,11 +168,7 @@ def _norm_location(loc: Any) -> Optional[str]:
 
 
 def _action_effects(action: Any, here: Optional[str]) -> Tuple[set, set, Optional[str]]:
-    """``(reads, writes, here_after)`` for one action performed at ``here``.
-
-    ``here`` is the robot's (normalised) location before the action;
-    ``here_after`` is where it stands afterwards (changed by go_to and escorts).
-    """
+    """``(reads, writes, here_after)`` for one action performed at ``here``."""
     kind = _kind(action)
     if kind == "go_to":
         return set(), set(), _norm_location(getattr(action, "location_to_go", None))
@@ -222,8 +183,6 @@ def _action_effects(action: Any, here: Optional[str]) -> Tuple[set, set, Optiona
 
 
 def _annotate_effects(segments: Sequence[_Segment], command: Any) -> None:
-    """Fill ``reads`` / ``writes`` of one command's segments (union over each
-    segment's actions), tracking where the robot is along the command."""
     actions = list(getattr(command, "commands", []))
     here: Optional[str] = None
     for seg in segments:
@@ -238,7 +197,6 @@ def _annotate_effects(segments: Sequence[_Segment], command: Any) -> None:
 
 
 def _room_table(segments: Sequence[_Segment], room_of: Optional[RoomFn]) -> Dict[str, Optional[str]]:
-    """Normalised place -> normalised containing room, asked once per place."""
     places = {v[1] for seg in segments for v in seg.reads | seg.writes if v[1] is not None}
     if room_of is None:
         return {p: None for p in places}
@@ -252,8 +210,6 @@ def _places_overlap(a: Optional[str], b: Optional[str], room: Dict[str, Optional
 
 
 def _interferes(s: _Segment, t: _Segment, room: Dict[str, Optional[str]]) -> bool:
-    """True iff one segment writes state the other reads or writes."""
-
     def clash(writes: FrozenSet[_Var], others: FrozenSet[_Var]) -> bool:
         return any(
             w[0] == o[0] and _places_overlap(w[1], o[1], room) for w in writes for o in others
@@ -266,15 +222,8 @@ def _build_needs(
     segments_per_cmd: Sequence[Sequence[_Segment]],
     room: Dict[str, Optional[str]],
 ) -> List[List[Tuple[Tuple[int, int], ...]]]:
-    """``needs[c][j]`` = pairs ``(d, m)``: segment j of command c may start only
-    once command d has done at least m segments.
-
-    Only earlier-issued commands (d < c) are constrained against, so every
-    conflict keeps the order of sequential execution, and per-command
-    sequential order always satisfies every constraint. Because each command
-    runs its segments in order, only the *last* conflicting segment of d
-    matters.
-    """
+    """``needs[c][j]`` = ``((d, m), ...)``: segment j of command c waits until
+    an earlier command d (d < c) has done m segments."""
     needs: List[List[Tuple[Tuple[int, int], ...]]] = []
     for c, segs in enumerate(segments_per_cmd):
         per_cmd = []
@@ -361,14 +310,7 @@ def _gripper_holder(
     k: Sequence[int],
     holding_after: Sequence[Sequence[bool]],
 ) -> Optional[int]:
-    """Return the command holding the gripper at progress vector ``k``, or None.
-
-    ``holding_after[c][k[c]]`` says whether command c, after its first k[c]
-    segments, still holds what it picked. The gripper state is therefore a
-    function of ``k`` alone, which is what makes ``k`` a sufficient DP state.
-    By the single-item invariant at most one command can be the holder, so
-    we return the first match.
-    """
+    """The command holding the gripper at progress vector ``k``, or None."""
     for c, kc in enumerate(k):
         if holding_after[c][kc]:
             return c
@@ -376,7 +318,7 @@ def _gripper_holder(
 
 
 def _state_count(seg_lens: Sequence[int]) -> int:
-    """Upper bound on DP states: n * prod(L_c + 1) (progress vector x last cmd)."""
+    """Upper bound on DP states: n * prod(L_c + 1)."""
     total = 1
     for length in seg_lens:
         total *= length + 1
@@ -391,45 +333,12 @@ def _optimal_schedule(
     has_origin: bool,
     needs: Optional[Sequence[Sequence[Sequence[Tuple[int, int]]]]] = None,
 ) -> List[int]:
-    """DP over per-command progress vectors, at segment granularity.
+    """DP over per-command progress vectors.
 
-    ``seg_ids[c][j]`` is the flat index (into ``segments``) of the j-th
-    segment of command c.
-
-    State (k, last):
-        k    — progress vector, k[c] = number of command c's segments done
-        last — command that ran the most recent segment (-1 at the start).
-               The robot stands at that segment's location, segment
-               seg_ids[last][k[last] - 1].
-
-    Why this is enough: segments of one command run in order, so the set of
-    done segments is always "the first k[c] of each command". The holder of
-    the gripper, the eligible next segments and the robot's position all
-    follow from (k, last), so nothing about the path taken to reach a state
-    affects its cost-to-go (principle of optimality).
-
-    Transition: advance any command c with k[c] < L[c] to its next segment
-    u = seg_ids[c][k[c]], unless another command holds the gripper and u is
-    not gripper-neutral (segments[u].ends_holding is not None), or some
-    ``(d, m)`` in ``needs[c][k[c]]`` has k[d] < m (an earlier-issued command
-    has not yet done a segment that u conflicts with). Like the gripper
-    rule, this is a function of k alone, so (k, last) stays a sufficient state.
-
-    Cost: f(k + e_c, c) = f(k, last) + edge[pos(k, last)][u]
-                          + epsilon * (c != last).
-    Seed: f(e_c, c)     = seed[u] + epsilon * c.
-
-    The epsilon term breaks ties (e.g. all-unknown locations where every
-    edge costs LARGE_M) toward per-command sequential order. It is small
-    enough to never override a real distance difference.
-
-    Every transition raises sum(k) by one, so states are processed in layers
-    of equal sum(k); a state's successors are always in the next layer.
-    Only reachable states are ever created.
-
-    Complexity: O(n^2 * prod(L_c + 1)) time, O(n * prod(L_c + 1)) memory,
-    which never exceeds the subset (Held-Karp) DP's O(2^M * M^2) because
-    L + 1 <= 2^L. For a GPSR batch (n = 3, L_c <= 4): at most 375 states.
+    State (k, last): k[c] = segments of command c done, last = command that
+    ran the latest segment (-1 at the start). ``seg_ids[c][j]`` is the flat
+    index of command c's j-th segment. States are expanded in layers of equal
+    sum(k). O(n^2 * prod(L_c + 1)).
     """
     M = len(segments)
     if M == 0:
@@ -482,8 +391,7 @@ def _optimal_schedule(
             best = (full, c)
 
     if best is None:
-        # Pathological — DP could not realise the full schedule.
-        # Per-command sequential order is always feasible.
+        # Only when 2+ commands pick without ever releasing (a parse error).
         return _sequential_schedule(segments)
 
     schedule: List[int] = []
@@ -522,11 +430,9 @@ def merge(
     ``distance`` overrides the straight-line cost (e.g. a planner's path
     length) and takes location names, ``None`` meaning the robot origin;
     it is only asked about the origin when ``origin`` is not None.
-    ``dependencies`` keeps conflicting segments of different commands in
-    issue order (see _EFFECTS); ``False`` gives travel-only interleaving, for
-    ablations. ``room_of`` maps a location name to its containing room so a
-    room-level reference conflicts with spots inside that room; without it,
-    only identical names conflict. It is asked once per distinct place.
+    ``dependencies=False`` disables cross-command conflict ordering.
+    ``room_of`` maps a location to its room, so a room overlaps the places
+    inside it; without it only identical names conflict.
     """
     if distance is None:
         loc_fn: Locator = locator if locator is not None else (lambda _: None)

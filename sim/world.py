@@ -121,13 +121,7 @@ class World:
         return None if hit is None else (hit[0], hit[1])
 
     def room_of(self, name: str) -> Optional[str]:
-        """The zone (room) a location lies in, or None if unknown.
-
-        The merger's ``room_of`` hook: lets a room-level reference ("count the
-        people in the living room") conflict with a spot inside that room
-        ("guide the person from the couch"). Mirrors the robot, where a
-        location's room is ``query_location(name).area`` from areas.json.
-        """
+        """Zone containing a location, or None. The merger's ``room_of`` hook."""
         xy = self.locator(name)
         if xy is None:
             return None

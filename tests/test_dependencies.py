@@ -1,22 +1,6 @@
-"""Cross-command dependencies: the merged plan is conflict-equivalent to
-running the commands one by one.
-
-Pure Python — no py_trees, no venv needed:
+"""Cross-command dependencies on random GPSR-shaped batches.
 
     python3 -m tests.test_dependencies      # or: pytest tests/test_dependencies.py
-
-Random batches are GPSR-shaped (pick/deliver, count, describe, find, guide,
-follow) over a small apartment, so different commands keep touching the same
-places. On each batch:
-
-  * the progress-vector DP and the Held-Karp oracle, both given the same
-    dependency table, reach the same optimal cost;
-  * the plan passes ``conflict_order_preserved`` (an action-level re-check
-    independent of the segment-level table) and the other invariants;
-  * dependencies never make travel *shorter* (they only remove options).
-
-It also reports how often travel-only interleaving (dependencies=False)
-breaks conflict order — the "answer errors" the abstract talks about.
 """
 
 import json
@@ -56,7 +40,6 @@ N_RANDOM = 300
 ORACLE_MAX_M = 11
 SEED = 20261112
 
-# A small two-room flat: placements and beacons inside rooms, plus the rooms.
 ROOMS = {
     "kitchen table": "kitchen", "counter": "kitchen", "trash bin": "kitchen",
     "couch": "living room", "side table": "living room", "bookshelf": "living room",
@@ -74,9 +57,8 @@ def _g(place):
 
 
 def _random_command(rng):
-    """One GPSR-shaped command as 1-3 segments."""
     kind = rng.choice(["fetch", "count", "describe", "find_tell", "guide", "follow"])
-    if kind == "fetch":  # take X from P and deliver / place / trash it
+    if kind == "fetch":
         src = rng.choice(["kitchen table", "counter", "side table", "bookshelf", "kitchen"])
         dst = rng.choice(["start", "couch", "side table", "trash bin", "kitchen table"])
         tail = {"action": rng.choice(["give_object", "place_object"])}
@@ -100,7 +82,6 @@ def _random_command(rng):
         dst = rng.choice(["kitchen", "living room"])
         return [_g(src), {"action": "find_person_by_name", "name": "Jane"},
                 {"action": "guide_person_to", "destination_room": dst}]
-    # follow, sometimes with no destination
     dest = rng.choice(["kitchen", "living room", None])
     follow = {"action": "follow_person_until"}
     if dest:
@@ -153,7 +134,6 @@ def test_random_batches():
         origin = (rng.uniform(0, 9), rng.uniform(-3, 3))
         distance = _euclidean_distance(locator, origin)
 
-        # 1. DP == oracle under the same dependency table
         flat, seg_ids, holding_after, needs = _plan_parts(commands, room_of)
         new = _optimal_schedule(flat, seg_ids, holding_after, distance, True, needs)
         old = heldkarp_schedule(flat, holding_after, distance, True, needs)
@@ -161,7 +141,6 @@ def test_random_batches():
             c_new, c_old = _travel(new, flat, distance, True), _travel(old, flat, distance, True)
             assert abs(c_new - c_old) < 1e-3, (c_new, c_old, cmds_json)
 
-        # 2. merge(): invariants hold, and dependencies never shorten travel
         with_deps = merge(commands, locator=locator, origin=origin, room_of=room_of)
         travel_only = merge(commands, locator=locator, origin=origin, room_of=room_of,
                             dependencies=False)
@@ -180,8 +159,8 @@ def test_random_batches():
     print(f"random: {with_conflicts}/{N_RANDOM} batches have a cross-command conflict; "
           f"travel-only breaks conflict order in {travel_only_broken} of them; "
           f"dependencies cost {sum(extra_travel) / len(extra_travel):.2f} m extra on average")
-    assert with_conflicts > N_RANDOM // 4  # the generator really does make conflicts
-    assert travel_only_broken > 0          # ...and travel-only really does break them
+    assert with_conflicts > N_RANDOM // 4
+    assert travel_only_broken > 0
 
 
 def _plan_travel(plan, locator, origin):
@@ -209,7 +188,6 @@ def test_every_scenario_with_dependencies_keeps_conflict_order():
 
 
 def test_conflict_free_showcases_keep_their_plan():
-    """No shared places in the sim showcases -> dependencies change nothing."""
     with open(VISUAL) as f:
         visual = json.load(f)
     for sc in visual:
@@ -222,8 +200,6 @@ def test_conflict_free_showcases_keep_their_plan():
 
 
 def test_needs_only_point_at_earlier_commands():
-    """Constraints only ever say 'wait for an earlier-issued command', which
-    is why per-command sequential order always satisfies them."""
     rng = random.Random(SEED + 1)
     for _ in range(100):
         commands = build_commands(_random_batch(rng))

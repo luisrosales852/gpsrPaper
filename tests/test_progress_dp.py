@@ -1,8 +1,4 @@
-"""Differential test: the progress-vector DP against the old subset DP.
-
-Both search the same feasible schedules (per-command prefix order + the
-single-gripper rule) with the same edge costs, so on every batch they must
-reach the same optimal cost. Pure Python — no py_trees, no venv needed:
+"""Progress-vector DP vs the Held-Karp oracle: same optimal cost.
 
     python3 -m tests.test_progress_dp      # or: pytest tests/test_progress_dp.py
 """
@@ -42,7 +38,6 @@ def _prepare(commands):
 
 
 def _travel(schedule, flat, distance, has_origin):
-    """Pure travel cost of a schedule (no tie-break epsilon)."""
     seed, edge = _cost_matrix(flat, distance, has_origin)
     if not schedule:
         return 0.0
@@ -50,7 +45,6 @@ def _travel(schedule, flat, distance, has_origin):
 
 
 def _feasible(schedule, flat, holding_after):
-    """Prefix order and single-gripper rule, checked independently of either DP."""
     n = len(holding_after)
     k = [0] * n
     expected = {}
@@ -76,7 +70,6 @@ def _compare(commands, distance, has_origin):
         return None
     c_new = _travel(new, flat, distance, has_origin)
     c_old = _travel(old, flat, distance, has_origin)
-    # Epsilon tie-breaks add < M * 1e-6; anything larger is a real difference.
     assert abs(c_new - c_old) < 1e-3, f"cost mismatch: progress={c_new} heldkarp={c_old}"
     return new == old
 
@@ -89,7 +82,7 @@ LOCS = [f"L{i}" for i in range(8)]
 
 def _random_batch(rng):
     coords = {name: [rng.uniform(0, 12), rng.uniform(0, 8)] for name in LOCS}
-    names = LOCS + ["unknown_place"]  # not in coords -> resolves to None -> LARGE_M edges
+    names = LOCS + ["unknown_place"]  # not in coords
     while True:
         n = rng.randint(2, 4)
         lens = [rng.randint(1, 4) for _ in range(n)]
@@ -97,7 +90,6 @@ def _random_batch(rng):
             break
     commands = []
     for L in lens:
-        # Gripper pattern: none, or pick at segment i and place at j >= i.
         pick_at = place_at = None
         if rng.random() < 0.6:
             pick_at = rng.randrange(L)
@@ -140,14 +132,12 @@ def test_scenarios_match_heldkarp():
             distance = make_distance(sc.get("coords", {}), sc["distance_overrides"], origin)
         else:
             distance = _euclidean_distance(make_locator(sc.get("coords", {})), origin)
-        # Asserts equal optimal cost; schedules may differ only on exact ties.
         _compare(commands, distance, origin is not None)
         checked += 1
     assert checked > 20
 
 
 def test_gpsr_batch_is_fast():
-    """3 commands x 4 segments: 375 states; must plan in well under 50 ms."""
     rng = random.Random(1)
     cmds = [
         sum(([{"action": "go_to", "location_to_go": f"L{rng.randrange(8)}"},
