@@ -948,7 +948,8 @@
       ],
       "plan_size": 34,
       "per_command_order": true
-    }
+    },
+    "_comment": "17 one-segment commands: n*prod(L_c+1) = 17*2^17 > _STATE_CAP, so the merger falls back to sequential. One-segment commands are the progress-vector DP's worst case (prod(L+1) = 2^M)."
   },
   {
     "name": "example_batch_no_command_lost",
@@ -1818,6 +1819,260 @@
       ],
       "non_goto_preserved": true,
       "per_command_order": true
+    }
+  },
+  {
+    "name": "beyond_old_m_cap_still_interleaves",
+    "_comment": "18 segments (3 cmds x 6). The old Held-Karp capped at 16 and fell back to sequential (17 west-east crossings); the progress-vector DP has 3*7^3 states and snakes the batch in 6 crossings.",
+    "commands": [
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "c0s0"
+        },
+        {
+          "action": "count",
+          "target_to_count": "x"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "c0s1"
+        },
+        {
+          "action": "count",
+          "target_to_count": "x"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "c0s2"
+        },
+        {
+          "action": "count",
+          "target_to_count": "x"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "c0s3"
+        },
+        {
+          "action": "count",
+          "target_to_count": "x"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "c0s4"
+        },
+        {
+          "action": "count",
+          "target_to_count": "x"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "c0s5"
+        },
+        {
+          "action": "count",
+          "target_to_count": "x"
+        }
+      ],
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "c1s0"
+        },
+        {
+          "action": "count",
+          "target_to_count": "x"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "c1s1"
+        },
+        {
+          "action": "count",
+          "target_to_count": "x"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "c1s2"
+        },
+        {
+          "action": "count",
+          "target_to_count": "x"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "c1s3"
+        },
+        {
+          "action": "count",
+          "target_to_count": "x"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "c1s4"
+        },
+        {
+          "action": "count",
+          "target_to_count": "x"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "c1s5"
+        },
+        {
+          "action": "count",
+          "target_to_count": "x"
+        }
+      ],
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "c2s0"
+        },
+        {
+          "action": "count",
+          "target_to_count": "x"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "c2s1"
+        },
+        {
+          "action": "count",
+          "target_to_count": "x"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "c2s2"
+        },
+        {
+          "action": "count",
+          "target_to_count": "x"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "c2s3"
+        },
+        {
+          "action": "count",
+          "target_to_count": "x"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "c2s4"
+        },
+        {
+          "action": "count",
+          "target_to_count": "x"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "c2s5"
+        },
+        {
+          "action": "count",
+          "target_to_count": "x"
+        }
+      ]
+    ],
+    "coords": {
+      "c0s0": [
+        0.0,
+        0.0
+      ],
+      "c0s1": [
+        10.0,
+        0.0
+      ],
+      "c0s2": [
+        0.0,
+        0.0
+      ],
+      "c0s3": [
+        10.0,
+        0.0
+      ],
+      "c0s4": [
+        0.0,
+        0.0
+      ],
+      "c0s5": [
+        10.0,
+        0.0
+      ],
+      "c1s0": [
+        0.0,
+        1.0
+      ],
+      "c1s1": [
+        10.0,
+        1.0
+      ],
+      "c1s2": [
+        0.0,
+        1.0
+      ],
+      "c1s3": [
+        10.0,
+        1.0
+      ],
+      "c1s4": [
+        0.0,
+        1.0
+      ],
+      "c1s5": [
+        10.0,
+        1.0
+      ],
+      "c2s0": [
+        0.0,
+        2.0
+      ],
+      "c2s1": [
+        10.0,
+        2.0
+      ],
+      "c2s2": [
+        0.0,
+        2.0
+      ],
+      "c2s3": [
+        10.0,
+        2.0
+      ],
+      "c2s4": [
+        0.0,
+        2.0
+      ],
+      "c2s5": [
+        10.0,
+        2.0
+      ]
+    },
+    "expect": {
+      "go_to_order": [
+        "c0s0",
+        "c1s0",
+        "c2s0",
+        "c2s1",
+        "c1s1",
+        "c0s1",
+        "c0s2",
+        "c1s2",
+        "c2s2",
+        "c2s3",
+        "c1s3",
+        "c0s3",
+        "c0s4",
+        "c1s4",
+        "c2s4",
+        "c2s5",
+        "c1s5",
+        "c0s5"
+      ],
+      "per_command_order": true,
+      "non_goto_preserved": true
     }
   }
 ]
