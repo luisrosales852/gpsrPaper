@@ -117,7 +117,8 @@ def run_once(sc: dict, mode: str, out_dir: str, args) -> dict:
     commands = build_commands(sc["commands"])
 
     router = planning_router(world)
-    plan = merge(commands, origin=origin, distance=merger_distance(world, router, origin))
+    plan = merge(commands, origin=origin, distance=merger_distance(world, router, origin),
+                 room_of=world.room_of)
     if mode == "sequential":
         exec_plan = sequential_plan(plan)
     else:
@@ -236,7 +237,8 @@ def main() -> int:
         commands = build_commands(sc["commands"])
         origin = tuple(sc["origin"]) if sc.get("origin") is not None else None
         router = planning_router(world)
-        plan = merge(commands, origin=origin, distance=merger_distance(world, router, origin))
+        plan = merge(commands, origin=origin, distance=merger_distance(world, router, origin),
+                 room_of=world.room_of)
         seq = sequential_plan(plan)
         print(f"scenario: {sc['name']}  ({len(commands)} commands, origin={origin})\n")
         print("MERGED     :", describe_plan(plan))

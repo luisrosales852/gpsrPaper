@@ -7,6 +7,10 @@ order that:
 
   * preserves intra-command sequencing,
   * keeps the gripper invariant (one item at a time, drop before pick),
+  * keeps every pair of *conflicting* segments of different commands in the
+    order the commands were given (one writes state at a place the other
+    reads or writes), so the merged plan is conflict-equivalent to running
+    the commands one by one: same answers and world effects, less travel,
   * minimizes travel between locations (2-D Euclidean by default, or any
     caller-supplied ``distance`` such as a planner's path length) using a
     precedence-constrained
@@ -22,7 +26,9 @@ Pipeline:
        - per-command prefix order (implicit: command c can only advance to
          its next segment, k_c + 1),
        - gripper-state check (only neutral segments may interleave while
-         another command is mid-block).
+         another command is mid-block),
+       - cross-command dependencies (a segment that conflicts with a segment
+         of an earlier-issued command waits until that segment is done).
   3. Walk the schedule back into a flat PlanAction list, then collapse
      consecutive same-location go_tos.
 
@@ -31,7 +37,7 @@ The merger is intentionally framework-free: it talks to BAML objects via
 """
 
 from dataclasses import dataclass
-from typing import Any, Callable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, FrozenSet, List, Optional, Sequence, Tuple
 
 # Action-kind classifications.
 _GRIPPER_ACQUIRES = frozenset({"pick_object"})
@@ -77,6 +83,13 @@ Locator = Callable[[str], Optional[Tuple[float, float]]]
 # (from_location or None for the robot origin, to_location) -> meters, or None
 # if unknown. A non-finite return (unreachable) also costs LARGE_M.
 DistanceFn = Callable[[Optional[str], str], Optional[float]]
+# location name -> the room that contains it (e.g. "couch" -> "living room"),
+# or None if unknown / the name is itself a room. Lets a room-level reference
+# ("count the people in the living room") conflict with a spot inside it
+# ("guide the person from the couch"). On the robot: query_location(name).area.
+RoomFn = Callable[[str], Optional[str]]
+# A shared state variable: (domain, place), e.g. ("objects", "kitchen table").
+_Var = Tuple[str, Optional[str]]
 
 
 @dataclass
@@ -88,6 +101,9 @@ class _Segment:
     # (True = held, False = empty); None if it has no gripper action,
     # i.e. the segment is gripper-neutral.
     ends_holding: Optional[bool] = None
+    # Shared state the segment reads / writes; see _annotate_effects.
+    reads: FrozenSet[_Var] = frozenset()
+    writes: FrozenSet[_Var] = frozenset()
 
 
 def _kind(action: Any) -> str:
@@ -130,6 +146,150 @@ def _decompose(cmd_idx: int, command: Any) -> List[_Segment]:
                 cur_end = False
     flush()
     return segments
+
+
+# ---------------------------------------------------------------------------
+# Cross-command dependencies: what each action reads and writes
+# ---------------------------------------------------------------------------
+# A state variable is (domain, location): "the objects at L" or "the people at
+# L". Variables are keyed by *location*, not by object or person name, because
+# the parser does not name things consistently across commands ("cup" / "cups"
+# / "drinks", "Jane" / "the person in red"), while every action has a location.
+# This over-approximates: counting apples and picking a cup at the same table
+# get ordered although they don't really conflict. A false dependency only
+# costs travel; a missed one costs a wrong answer.
+#
+# Two places overlap if they are the same place or one contains the other
+# (see RoomFn): GPSR commands mix room-level references ("count the people in
+# the living room", "find a cup in the kitchen") with placement / beacon ones
+# ("guide Jane from the couch", "count the drinks on the kitchen table").
+# Two different spots in the same room do not overlap.
+# Location None (no go_to yet, or a follow with no destination) overlaps every
+# location.
+_OBJECTS = "objects"
+_PEOPLE = "people"
+
+# kind -> (domains read at the current location, domains written there).
+# Kinds not listed (go_to, answer_question, say_with_context) touch no shared
+# state: go_to only moves the robot, which is exactly what reordering changes,
+# and the other two use only their own command's results.
+_EFFECTS = {
+    "pick_object": ({_OBJECTS}, {_OBJECTS}),
+    "place_object": (set(), {_OBJECTS}),
+    "give_object": ({_PEOPLE}, set()),
+    "count": ({_OBJECTS, _PEOPLE}, set()),  # can count people too
+    "get_visual_info": ({_OBJECTS}, set()),
+    "find_person": ({_PEOPLE}, set()),
+    "find_person_by_name": ({_PEOPLE}, set()),
+    "get_person_info": ({_PEOPLE}, set()),
+    # Escorts: the person leaves `here` (written here) and also arrives at the
+    # destination (written there, see _action_effects); the robot moves with them.
+    "follow_person_until": ({_PEOPLE}, {_PEOPLE}),
+    "guide_person_to": ({_PEOPLE}, {_PEOPLE}),
+}
+# Escort kind -> the attribute naming its destination.
+_ESCORT_DESTINATION = {
+    "follow_person_until": "destination",
+    "guide_person_to": "destination_room",
+}
+
+
+def _norm_location(loc: Any) -> Optional[str]:
+    """Canonical location name, so "Living_Room " and "living room" match."""
+    if not isinstance(loc, str):
+        return None
+    loc = loc.strip().lower().replace("_", " ")
+    return loc or None
+
+
+def _action_effects(action: Any, here: Optional[str]) -> Tuple[set, set, Optional[str]]:
+    """``(reads, writes, here_after)`` for one action performed at ``here``.
+
+    ``here`` is the robot's (normalised) location before the action;
+    ``here_after`` is where it stands afterwards (changed by go_to and escorts).
+    """
+    kind = _kind(action)
+    if kind == "go_to":
+        return set(), set(), _norm_location(getattr(action, "location_to_go", None))
+    read_domains, write_domains = _EFFECTS.get(kind, (set(), set()))
+    reads = {(d, here) for d in read_domains}
+    writes = {(d, here) for d in write_domains}
+    here_after = here
+    if kind in _ESCORT_DESTINATION:
+        here_after = _norm_location(getattr(action, _ESCORT_DESTINATION[kind], None))
+        writes.add((_PEOPLE, here_after))
+    return reads, writes, here_after
+
+
+def _annotate_effects(segments: Sequence[_Segment], command: Any) -> None:
+    """Fill ``reads`` / ``writes`` of one command's segments (union over each
+    segment's actions), tracking where the robot is along the command."""
+    actions = list(getattr(command, "commands", []))
+    here: Optional[str] = None
+    for seg in segments:
+        reads: set = set()
+        writes: set = set()
+        for i in seg.indices:
+            r, w, here = _action_effects(actions[i], here)
+            reads |= r
+            writes |= w
+        seg.reads = frozenset(reads)
+        seg.writes = frozenset(writes)
+
+
+def _room_table(segments: Sequence[_Segment], room_of: Optional[RoomFn]) -> Dict[str, Optional[str]]:
+    """Normalised place -> normalised containing room, asked once per place."""
+    places = {v[1] for seg in segments for v in seg.reads | seg.writes if v[1] is not None}
+    if room_of is None:
+        return {p: None for p in places}
+    return {p: _norm_location(room_of(p)) for p in places}
+
+
+def _places_overlap(a: Optional[str], b: Optional[str], room: Dict[str, Optional[str]]) -> bool:
+    if a is None or b is None or a == b:
+        return True
+    return room.get(a) == b or room.get(b) == a
+
+
+def _interferes(s: _Segment, t: _Segment, room: Dict[str, Optional[str]]) -> bool:
+    """True iff one segment writes state the other reads or writes."""
+
+    def clash(writes: FrozenSet[_Var], others: FrozenSet[_Var]) -> bool:
+        return any(
+            w[0] == o[0] and _places_overlap(w[1], o[1], room) for w in writes for o in others
+        )
+
+    return clash(s.writes, t.reads | t.writes) or clash(t.writes, s.reads)
+
+
+def _build_needs(
+    segments_per_cmd: Sequence[Sequence[_Segment]],
+    room: Dict[str, Optional[str]],
+) -> List[List[Tuple[Tuple[int, int], ...]]]:
+    """``needs[c][j]`` = pairs ``(d, m)``: segment j of command c may start only
+    once command d has done at least m segments.
+
+    Only earlier-issued commands (d < c) are constrained against, so every
+    conflict keeps the order of sequential execution, and per-command
+    sequential order always satisfies every constraint. Because each command
+    runs its segments in order, only the *last* conflicting segment of d
+    matters.
+    """
+    needs: List[List[Tuple[Tuple[int, int], ...]]] = []
+    for c, segs in enumerate(segments_per_cmd):
+        per_cmd = []
+        for seg in segs:
+            req = []
+            for d in range(c):
+                m = 0
+                for i, other in enumerate(segments_per_cmd[d]):
+                    if _interferes(other, seg, room):
+                        m = i + 1
+                if m:
+                    req.append((d, m))
+            per_cmd.append(tuple(req))
+        needs.append(per_cmd)
+    return needs
 
 
 def _euclidean(a: Optional[Tuple[float, float]], b: Optional[Tuple[float, float]]) -> float:
@@ -229,6 +389,7 @@ def _optimal_schedule(
     holding_after: Sequence[Sequence[bool]],
     distance: DistanceFn,
     has_origin: bool,
+    needs: Optional[Sequence[Sequence[Sequence[Tuple[int, int]]]]] = None,
 ) -> List[int]:
     """DP over per-command progress vectors, at segment granularity.
 
@@ -249,7 +410,10 @@ def _optimal_schedule(
 
     Transition: advance any command c with k[c] < L[c] to its next segment
     u = seg_ids[c][k[c]], unless another command holds the gripper and u is
-    not gripper-neutral (segments[u].ends_holding is not None).
+    not gripper-neutral (segments[u].ends_holding is not None), or some
+    ``(d, m)`` in ``needs[c][k[c]]`` has k[d] < m (an earlier-issued command
+    has not yet done a segment that u conflicts with). Like the gripper
+    rule, this is a function of k alone, so (k, last) stays a sufficient state.
 
     Cost: f(k + e_c, c) = f(k, last) + edge[pos(k, last)][u]
                           + epsilon * (c != last).
@@ -293,6 +457,8 @@ def _optimal_schedule(
                     continue
                 u = seg_ids[c][k[c]]
                 if holder is not None and holder != c and segments[u].ends_holding is not None:
+                    continue
+                if needs is not None and any(k[d] < m for d, m in needs[c][k[c]]):
                     continue
                 if here < 0:
                     step = seed[u] + _TIEBREAK_EPSILON * c
@@ -342,6 +508,8 @@ def merge(
     locator: Optional[Locator] = None,
     origin: Optional[Tuple[float, float]] = None,
     distance: Optional[DistanceFn] = None,
+    dependencies: bool = True,
+    room_of: Optional[RoomFn] = None,
 ) -> InterleavedPlan:
     """Merge N parsed commands into one interleaved plan.
 
@@ -354,6 +522,11 @@ def merge(
     ``distance`` overrides the straight-line cost (e.g. a planner's path
     length) and takes location names, ``None`` meaning the robot origin;
     it is only asked about the origin when ``origin`` is not None.
+    ``dependencies`` keeps conflicting segments of different commands in
+    issue order (see _EFFECTS); ``False`` gives travel-only interleaving, for
+    ablations. ``room_of`` maps a location name to its containing room so a
+    room-level reference conflicts with spots inside that room; without it,
+    only identical names conflict. It is asked once per distinct place.
     """
     if distance is None:
         loc_fn: Locator = locator if locator is not None else (lambda _: None)
@@ -366,6 +539,7 @@ def merge(
     segments_per_cmd: List[List[_Segment]] = []
     for cmd_idx, command in enumerate(commands):
         per_cmd = _decompose(cmd_idx, command)
+        _annotate_effects(per_cmd, command)
         segments_per_cmd.append(per_cmd)
         flat_segments.extend(per_cmd)
 
@@ -380,6 +554,11 @@ def merge(
         gi += len(per_cmd)
 
     holding_after = _build_holding_after(segments_per_cmd)
+    needs = (
+        _build_needs(segments_per_cmd, _room_table(flat_segments, room_of))
+        if dependencies
+        else None
+    )
 
     if _state_count([len(ids) for ids in seg_ids]) > _STATE_CAP:
         schedule = _sequential_schedule(flat_segments)
@@ -390,6 +569,7 @@ def merge(
             holding_after,
             distance,
             origin is not None,
+            needs,
         )
 
     actions: List[PlanAction] = []

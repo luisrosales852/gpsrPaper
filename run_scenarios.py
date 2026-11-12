@@ -16,8 +16,7 @@ from tests._merger_helpers import (  # noqa: E402
     build_commands,
     describe_plan,
     evaluate_expectations,
-    make_distance,
-    make_locator,
+    merge_kwargs,
 )
 
 SCENARIOS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scenarios", "merger.json")
@@ -31,20 +30,14 @@ def main() -> int:
     passed = 0
     for sc in scenarios:
         commands = build_commands(sc["commands"])
-        kwargs = {}
-        if "coords" in sc:
-            kwargs["locator"] = make_locator(sc["coords"])
-        if "origin" in sc:
-            kwargs["origin"] = tuple(sc["origin"]) if sc["origin"] is not None else None
-        if "distance_overrides" in sc:
-            kwargs["distance"] = make_distance(
-                sc.get("coords", {}), sc["distance_overrides"], kwargs.get("origin")
-            )
+        kwargs = merge_kwargs(sc)
 
         plan = None
         try:
             plan = merge(commands, **kwargs)
-            ok, failures = evaluate_expectations(plan, commands, sc.get("expect", {}))
+            ok, failures = evaluate_expectations(
+                plan, commands, sc.get("expect", {}), kwargs.get("room_of")
+            )
         except Exception as e:  # noqa: BLE001
             ok, failures = False, [f"EXCEPTION: {e}"]
 

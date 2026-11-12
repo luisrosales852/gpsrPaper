@@ -2074,5 +2074,1055 @@
       "per_command_order": true,
       "non_goto_preserved": true
     }
+  },
+  {
+    "name": "dep_count_waits_for_earlier_pick_same_placement",
+    "_comment": "A (issued first): find Jane in the living room, take a cup from the kitchen table and give it to her. B: count the cups on the kitchen table and tell me. Sequentially B counts after the cup is gone, so B's count must follow A's pick.",
+    "commands": [
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "living room"
+        },
+        {
+          "action": "find_person_by_name",
+          "name": "Jane"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "kitchen table"
+        },
+        {
+          "action": "pick_object",
+          "object_to_pick": "cup"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "living room"
+        },
+        {
+          "action": "give_object"
+        }
+      ],
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "kitchen table"
+        },
+        {
+          "action": "count",
+          "target_to_count": "cups"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "start"
+        },
+        {
+          "action": "say_with_context",
+          "user_instruction": "report",
+          "previous_command_info": []
+        }
+      ]
+    ],
+    "coords": {
+      "start": [
+        -3,
+        0
+      ],
+      "kitchen table": [
+        0,
+        0
+      ],
+      "kitchen": [
+        0,
+        1
+      ],
+      "waste basket": [
+        1,
+        -3
+      ],
+      "living room": [
+        10,
+        0
+      ],
+      "couch": [
+        10,
+        1
+      ],
+      "side table": [
+        9,
+        -1
+      ],
+      "bedroom": [
+        10,
+        5
+      ],
+      "entrance": [
+        5,
+        -4
+      ]
+    },
+    "origin": [
+      0,
+      0
+    ],
+    "expect": {
+      "per_command_order": true,
+      "non_goto_preserved": true,
+      "gripper_invariant": true,
+      "conflict_order_preserved": true,
+      "action_before": [
+        [
+          [
+            0,
+            3
+          ],
+          [
+            1,
+            1
+          ]
+        ]
+      ]
+    }
+  },
+  {
+    "name": "dep_count_waits_without_dependencies_is_violated",
+    "_comment": "Same batch with dependencies=False (travel-only, the competition planner): B counts while A is still on its way to pick the cup, so it reports one cup more than the sequential robot would. This is the error the dependency analysis removes.",
+    "commands": [
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "living room"
+        },
+        {
+          "action": "find_person_by_name",
+          "name": "Jane"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "kitchen table"
+        },
+        {
+          "action": "pick_object",
+          "object_to_pick": "cup"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "living room"
+        },
+        {
+          "action": "give_object"
+        }
+      ],
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "kitchen table"
+        },
+        {
+          "action": "count",
+          "target_to_count": "cups"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "start"
+        },
+        {
+          "action": "say_with_context",
+          "user_instruction": "report",
+          "previous_command_info": []
+        }
+      ]
+    ],
+    "coords": {
+      "start": [
+        -3,
+        0
+      ],
+      "kitchen table": [
+        0,
+        0
+      ],
+      "kitchen": [
+        0,
+        1
+      ],
+      "waste basket": [
+        1,
+        -3
+      ],
+      "living room": [
+        10,
+        0
+      ],
+      "couch": [
+        10,
+        1
+      ],
+      "side table": [
+        9,
+        -1
+      ],
+      "bedroom": [
+        10,
+        5
+      ],
+      "entrance": [
+        5,
+        -4
+      ]
+    },
+    "origin": [
+      0,
+      0
+    ],
+    "dependencies": false,
+    "expect": {
+      "per_command_order": true,
+      "non_goto_preserved": true,
+      "gripper_invariant": true,
+      "conflict_order_preserved": false,
+      "action_before": [
+        [
+          [
+            1,
+            1
+          ],
+          [
+            0,
+            3
+          ]
+        ]
+      ]
+    }
+  },
+  {
+    "name": "dep_count_issued_first_stays_before_pick",
+    "_comment": "Reverse issue order: the count was asked first, so it must happen before the pick.",
+    "commands": [
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "kitchen table"
+        },
+        {
+          "action": "count",
+          "target_to_count": "cups"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "start"
+        },
+        {
+          "action": "say_with_context",
+          "user_instruction": "report",
+          "previous_command_info": []
+        }
+      ],
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "living room"
+        },
+        {
+          "action": "find_person_by_name",
+          "name": "Jane"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "kitchen table"
+        },
+        {
+          "action": "pick_object",
+          "object_to_pick": "cup"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "living room"
+        },
+        {
+          "action": "give_object"
+        }
+      ]
+    ],
+    "coords": {
+      "start": [
+        -3,
+        0
+      ],
+      "kitchen table": [
+        0,
+        0
+      ],
+      "kitchen": [
+        0,
+        1
+      ],
+      "waste basket": [
+        1,
+        -3
+      ],
+      "living room": [
+        10,
+        0
+      ],
+      "couch": [
+        10,
+        1
+      ],
+      "side table": [
+        9,
+        -1
+      ],
+      "bedroom": [
+        10,
+        5
+      ],
+      "entrance": [
+        5,
+        -4
+      ]
+    },
+    "origin": [
+      0,
+      0
+    ],
+    "expect": {
+      "per_command_order": true,
+      "non_goto_preserved": true,
+      "gripper_invariant": true,
+      "conflict_order_preserved": true,
+      "action_before": [
+        [
+          [
+            0,
+            1
+          ],
+          [
+            1,
+            3
+          ]
+        ]
+      ]
+    }
+  },
+  {
+    "name": "dep_guide_from_beacon_vs_count_people_in_room",
+    "_comment": "A: guide Jane from the couch to the kitchen. B: count the people in the living room. The couch is in the living room (rooms map), so B counts after Jane has left, as sequentially. The robot starts in the living room, so travel alone would count first.",
+    "commands": [
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "couch"
+        },
+        {
+          "action": "find_person_by_name",
+          "name": "Jane"
+        },
+        {
+          "action": "guide_person_to",
+          "destination_room": "kitchen"
+        }
+      ],
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "living room"
+        },
+        {
+          "action": "count",
+          "target_to_count": "people"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "start"
+        },
+        {
+          "action": "say_with_context",
+          "user_instruction": "report",
+          "previous_command_info": []
+        }
+      ]
+    ],
+    "coords": {
+      "start": [
+        -3,
+        0
+      ],
+      "kitchen table": [
+        0,
+        0
+      ],
+      "kitchen": [
+        0,
+        1
+      ],
+      "waste basket": [
+        1,
+        -3
+      ],
+      "living room": [
+        10,
+        0
+      ],
+      "couch": [
+        10,
+        1
+      ],
+      "side table": [
+        9,
+        -1
+      ],
+      "bedroom": [
+        10,
+        5
+      ],
+      "entrance": [
+        5,
+        -4
+      ]
+    },
+    "origin": [
+      10,
+      0
+    ],
+    "rooms": {
+      "kitchen table": "kitchen",
+      "couch": "living room",
+      "side table": "living room"
+    },
+    "expect": {
+      "per_command_order": true,
+      "non_goto_preserved": true,
+      "gripper_invariant": true,
+      "conflict_order_preserved": true,
+      "action_before": [
+        [
+          [
+            0,
+            2
+          ],
+          [
+            1,
+            1
+          ]
+        ]
+      ]
+    }
+  },
+  {
+    "name": "dep_guide_vs_count_without_rooms_is_missed",
+    "_comment": "Same batch without a rooms map: 'couch' and 'living room' are different names, the conflict is invisible and the count runs first. Pins why merge(room_of=...) is needed on the robot.",
+    "commands": [
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "couch"
+        },
+        {
+          "action": "find_person_by_name",
+          "name": "Jane"
+        },
+        {
+          "action": "guide_person_to",
+          "destination_room": "kitchen"
+        }
+      ],
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "living room"
+        },
+        {
+          "action": "count",
+          "target_to_count": "people"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "start"
+        },
+        {
+          "action": "say_with_context",
+          "user_instruction": "report",
+          "previous_command_info": []
+        }
+      ]
+    ],
+    "coords": {
+      "start": [
+        -3,
+        0
+      ],
+      "kitchen table": [
+        0,
+        0
+      ],
+      "kitchen": [
+        0,
+        1
+      ],
+      "waste basket": [
+        1,
+        -3
+      ],
+      "living room": [
+        10,
+        0
+      ],
+      "couch": [
+        10,
+        1
+      ],
+      "side table": [
+        9,
+        -1
+      ],
+      "bedroom": [
+        10,
+        5
+      ],
+      "entrance": [
+        5,
+        -4
+      ]
+    },
+    "origin": [
+      10,
+      0
+    ],
+    "expect": {
+      "per_command_order": true,
+      "non_goto_preserved": true,
+      "gripper_invariant": true,
+      "action_before": [
+        [
+          [
+            1,
+            1
+          ],
+          [
+            0,
+            2
+          ]
+        ]
+      ]
+    }
+  },
+  {
+    "name": "dep_describe_waits_for_earlier_place",
+    "_comment": "A: take the apple from the kitchen table and put it on the side table. B: tell me the biggest object on the side table. B's get_visual_info must see the apple, so it follows A's place.",
+    "commands": [
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "kitchen table"
+        },
+        {
+          "action": "pick_object",
+          "object_to_pick": "apple"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "side table"
+        },
+        {
+          "action": "place_object"
+        }
+      ],
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "side table"
+        },
+        {
+          "action": "get_visual_info",
+          "measure": "biggest",
+          "object_category": "object"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "start"
+        },
+        {
+          "action": "say_with_context",
+          "user_instruction": "report",
+          "previous_command_info": []
+        }
+      ]
+    ],
+    "coords": {
+      "start": [
+        -3,
+        0
+      ],
+      "kitchen table": [
+        0,
+        0
+      ],
+      "kitchen": [
+        0,
+        1
+      ],
+      "waste basket": [
+        1,
+        -3
+      ],
+      "living room": [
+        10,
+        0
+      ],
+      "couch": [
+        10,
+        1
+      ],
+      "side table": [
+        9,
+        -1
+      ],
+      "bedroom": [
+        10,
+        5
+      ],
+      "entrance": [
+        5,
+        -4
+      ]
+    },
+    "origin": [
+      10,
+      0
+    ],
+    "expect": {
+      "per_command_order": true,
+      "non_goto_preserved": true,
+      "gripper_invariant": true,
+      "conflict_order_preserved": true,
+      "action_before": [
+        [
+          [
+            0,
+            3
+          ],
+          [
+            1,
+            1
+          ]
+        ]
+      ]
+    }
+  },
+  {
+    "name": "dep_room_level_pick_vs_count_on_placement",
+    "_comment": "A: find a cup in the kitchen, take it and throw it in the trash (pick at room level). B: count the cups on the kitchen table. The kitchen table is inside the kitchen, so B waits for A's pick.",
+    "commands": [
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "kitchen"
+        },
+        {
+          "action": "pick_object",
+          "object_to_pick": "cup"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "waste basket"
+        },
+        {
+          "action": "place_object"
+        }
+      ],
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "kitchen table"
+        },
+        {
+          "action": "count",
+          "target_to_count": "cups"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "start"
+        },
+        {
+          "action": "say_with_context",
+          "user_instruction": "report",
+          "previous_command_info": []
+        }
+      ]
+    ],
+    "coords": {
+      "start": [
+        -3,
+        0
+      ],
+      "kitchen table": [
+        0,
+        0
+      ],
+      "kitchen": [
+        0,
+        1
+      ],
+      "waste basket": [
+        1,
+        -3
+      ],
+      "living room": [
+        10,
+        0
+      ],
+      "couch": [
+        10,
+        1
+      ],
+      "side table": [
+        9,
+        -1
+      ],
+      "bedroom": [
+        10,
+        5
+      ],
+      "entrance": [
+        5,
+        -4
+      ]
+    },
+    "origin": [
+      0,
+      0
+    ],
+    "rooms": {
+      "kitchen table": "kitchen",
+      "couch": "living room",
+      "side table": "living room"
+    },
+    "expect": {
+      "per_command_order": true,
+      "non_goto_preserved": true,
+      "gripper_invariant": true,
+      "conflict_order_preserved": true,
+      "action_before": [
+        [
+          [
+            0,
+            1
+          ],
+          [
+            1,
+            1
+          ]
+        ]
+      ]
+    }
+  },
+  {
+    "name": "dep_location_names_normalised",
+    "_comment": "'Kitchen_Table' and 'kitchen table' are the same place for the dependency check (lowercase, '_' -> space), so the count still waits for the pick.",
+    "commands": [
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "living room"
+        },
+        {
+          "action": "find_person_by_name",
+          "name": "Jane"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "Kitchen_Table"
+        },
+        {
+          "action": "pick_object",
+          "object_to_pick": "cup"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "living room"
+        },
+        {
+          "action": "give_object"
+        }
+      ],
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "kitchen table"
+        },
+        {
+          "action": "count",
+          "target_to_count": "cups"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "start"
+        },
+        {
+          "action": "say_with_context",
+          "user_instruction": "report",
+          "previous_command_info": []
+        }
+      ]
+    ],
+    "coords": {
+      "start": [
+        -3,
+        0
+      ],
+      "kitchen table": [
+        0,
+        0
+      ],
+      "kitchen": [
+        0,
+        1
+      ],
+      "waste basket": [
+        1,
+        -3
+      ],
+      "living room": [
+        10,
+        0
+      ],
+      "couch": [
+        10,
+        1
+      ],
+      "side table": [
+        9,
+        -1
+      ],
+      "bedroom": [
+        10,
+        5
+      ],
+      "entrance": [
+        5,
+        -4
+      ],
+      "Kitchen_Table": [
+        0,
+        0
+      ]
+    },
+    "origin": [
+      0,
+      0
+    ],
+    "expect": {
+      "per_command_order": true,
+      "non_goto_preserved": true,
+      "gripper_invariant": true,
+      "conflict_order_preserved": true,
+      "action_before": [
+        [
+          [
+            0,
+            3
+          ],
+          [
+            1,
+            1
+          ]
+        ]
+      ]
+    }
+  },
+  {
+    "name": "dep_follow_without_destination_orders_people_reads",
+    "_comment": "A: follow the person at the entrance (no destination: they could end up anywhere). B: find Jane in the bedroom and tell her the time. An unknown destination overlaps every place, so B's find waits for the follow.",
+    "commands": [
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "entrance"
+        },
+        {
+          "action": "find_person",
+          "attribute_value": "waving"
+        },
+        {
+          "action": "follow_person_until"
+        }
+      ],
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "bedroom"
+        },
+        {
+          "action": "find_person_by_name",
+          "name": "Jane"
+        },
+        {
+          "action": "say_with_context",
+          "user_instruction": "the time"
+        }
+      ]
+    ],
+    "coords": {
+      "start": [
+        -3,
+        0
+      ],
+      "kitchen table": [
+        0,
+        0
+      ],
+      "kitchen": [
+        0,
+        1
+      ],
+      "waste basket": [
+        1,
+        -3
+      ],
+      "living room": [
+        10,
+        0
+      ],
+      "couch": [
+        10,
+        1
+      ],
+      "side table": [
+        9,
+        -1
+      ],
+      "bedroom": [
+        10,
+        5
+      ],
+      "entrance": [
+        5,
+        -4
+      ]
+    },
+    "origin": [
+      10,
+      5
+    ],
+    "expect": {
+      "per_command_order": true,
+      "non_goto_preserved": true,
+      "gripper_invariant": true,
+      "conflict_order_preserved": true,
+      "action_before": [
+        [
+          [
+            0,
+            2
+          ],
+          [
+            1,
+            1
+          ]
+        ]
+      ]
+    }
+  },
+  {
+    "name": "dep_two_reads_do_not_conflict",
+    "_comment": "A: count the people in the living room, then count the cups on the kitchen table. B: tell me the biggest object in the kitchen. Both only read objects in the kitchen (the table is inside it), and reads never conflict, so B - issued later - may still go first. The robot starts in the kitchen, so it does.",
+    "commands": [
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "living room"
+        },
+        {
+          "action": "count",
+          "target_to_count": "people"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "kitchen table"
+        },
+        {
+          "action": "count",
+          "target_to_count": "cups"
+        }
+      ],
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "kitchen"
+        },
+        {
+          "action": "get_visual_info",
+          "measure": "biggest",
+          "object_category": "object"
+        }
+      ]
+    ],
+    "coords": {
+      "start": [
+        -3,
+        0
+      ],
+      "kitchen table": [
+        0,
+        0
+      ],
+      "kitchen": [
+        0,
+        1
+      ],
+      "waste basket": [
+        1,
+        -3
+      ],
+      "living room": [
+        10,
+        0
+      ],
+      "couch": [
+        10,
+        1
+      ],
+      "side table": [
+        9,
+        -1
+      ],
+      "bedroom": [
+        10,
+        5
+      ],
+      "entrance": [
+        5,
+        -4
+      ]
+    },
+    "origin": [
+      0,
+      1
+    ],
+    "rooms": {
+      "kitchen table": "kitchen",
+      "couch": "living room",
+      "side table": "living room"
+    },
+    "expect": {
+      "per_command_order": true,
+      "non_goto_preserved": true,
+      "gripper_invariant": true,
+      "conflict_order_preserved": true,
+      "action_before": [
+        [
+          [
+            1,
+            1
+          ],
+          [
+            0,
+            1
+          ]
+        ]
+      ]
+    }
   }
 ]

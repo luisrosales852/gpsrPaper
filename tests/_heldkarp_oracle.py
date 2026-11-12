@@ -15,10 +15,13 @@ def heldkarp_schedule(
     holding_after: Sequence[Sequence[bool]],
     distance,
     has_origin: bool,
+    needs=None,
 ) -> Optional[List[int]]:
     """Return the optimal flat-index schedule, or None if none is feasible.
 
     ``segments`` must be in command-major order (as ``merge`` builds them).
+    ``needs[c][j]`` (optional) lists ``(d, m)``: segment j of command c needs
+    at least m segments of command d done, the same constraint as the merger.
     """
     M = len(segments)
     if M == 0:
@@ -45,8 +48,11 @@ def heldkarp_schedule(
     f = [[INF] * M for _ in range(1 << M)]
     parent = [[-1] * M for _ in range(1 << M)]
     for u in range(M):
-        if seg_pos[u] == 0:
-            f[1 << u][u] = seed[u] + _TIEBREAK_EPSILON * seg_cmd[u]
+        if seg_pos[u] != 0:
+            continue
+        if needs is not None and needs[seg_cmd[u]][0]:
+            continue  # must wait for an earlier command: can't be first
+        f[1 << u][u] = seed[u] + _TIEBREAK_EPSILON * seg_cmd[u]
 
     for S in range(1, 1 << M):
         holder = holder_of(S)
@@ -57,6 +63,10 @@ def heldkarp_schedule(
                 if (S >> u) & 1:
                     continue
                 if (S & cmd_seg_mask[seg_cmd[u]]).bit_count() != seg_pos[u]:
+                    continue
+                if needs is not None and any(
+                    (S & cmd_seg_mask[d]).bit_count() < m for d, m in needs[seg_cmd[u]][seg_pos[u]]
+                ):
                     continue
                 if holder is not None and holder != seg_cmd[u] and segments[u].ends_holding is not None:
                     continue

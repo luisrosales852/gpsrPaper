@@ -8,7 +8,7 @@ production module focused on planning.
 from types import SimpleNamespace
 from typing import Any, Iterable, List, Sequence, Tuple
 
-from gpsr_merger.merger import InterleavedPlan, PlanAction
+from gpsr_merger.merger import InterleavedPlan, PlanAction, _action_effects, _norm_location
 
 
 def gripper_invariant_holds(plan: Iterable[PlanAction]) -> bool:
@@ -90,6 +90,51 @@ def gripper_walk_strict(plan_actions: Iterable[PlanAction]) -> bool:
     return True
 
 
+def action_effects_by_source(commands: Sequence[Any]) -> dict:
+    """``{(cmd, idx): (reads, writes)}`` for every action, walking each command
+    in its original order so each action is tagged at the place it happens."""
+    out = {}
+    for c, command in enumerate(commands):
+        here = None
+        for i, action in enumerate(getattr(command, "commands", [])):
+            reads, writes, here = _action_effects(action, here)
+            out[(c, i)] = (reads, writes)
+    return out
+
+
+def conflict_order_preserved(plan_actions: Sequence[PlanAction], commands: Sequence[Any],
+                             room_of=None) -> bool:
+    """Every pair of actions of different commands that conflict (one writes a
+    variable the other reads or writes, at the same place or one place inside
+    the other) appears in the order the commands were issued. Equivalent to:
+    the merged plan is conflict-equivalent to running the commands one by one.
+
+    Re-derives the conflicts at *action* level from the plan itself, so it
+    checks the scheduler's segment-level dependency table independently.
+    """
+    effects = action_effects_by_source(commands)
+
+    def room(place):
+        return _norm_location(room_of(place)) if (room_of and place) else None
+
+    def overlap(a, b):
+        return a is None or b is None or a == b or room(a) == b or room(b) == a
+
+    def clash(writes, others):
+        return any(w[0] == o[0] and overlap(w[1], o[1]) for w in writes for o in others)
+
+    seq = [(pa.source_cmd, pa.source_idx) for pa in plan_actions]
+    for i, (ci, ai) in enumerate(seq):
+        ri, wi = effects[(ci, ai)]
+        for cj, aj in seq[i + 1:]:
+            if cj >= ci:
+                continue  # same command, or already in issue order
+            rj, wj = effects[(cj, aj)]
+            if clash(wi, rj | wj) or clash(wj, ri):
+                return False  # a later-issued command's action ran first
+    return True
+
+
 def build_commands(commands_json: Sequence[Sequence[dict]]) -> List[Any]:
     """Turn the JSON command spec into BAML-like stand-ins the merger accepts.
 
@@ -140,6 +185,29 @@ def make_distance(coords: dict, overrides: Sequence[Sequence[Any]], origin=None)
     return distance
 
 
+def make_room_of(rooms: dict):
+    """``merge(room_of=...)`` from a ``{place: room}`` map; others -> None."""
+    return lambda name: rooms.get(name)
+
+
+def merge_kwargs(sc: dict) -> dict:
+    """The ``merge()`` keyword arguments a scenario asks for."""
+    kwargs = {}
+    if "coords" in sc:
+        kwargs["locator"] = make_locator(sc["coords"])
+    if "origin" in sc:
+        kwargs["origin"] = tuple(sc["origin"]) if sc["origin"] is not None else None
+    if "distance_overrides" in sc:
+        kwargs["distance"] = make_distance(
+            sc.get("coords", {}), sc["distance_overrides"], kwargs.get("origin")
+        )
+    if "rooms" in sc:
+        kwargs["room_of"] = make_room_of(sc["rooms"])
+    if "dependencies" in sc:
+        kwargs["dependencies"] = bool(sc["dependencies"])
+    return kwargs
+
+
 def _go_tos(plan: InterleavedPlan) -> List[PlanAction]:
     return [pa for pa in plan.actions if getattr(pa.action, "action", "") == "go_to"]
 
@@ -172,7 +240,7 @@ def describe_plan(plan: InterleavedPlan) -> str:
 
 
 def evaluate_expectations(
-    plan: InterleavedPlan, commands: Sequence[Any], expect: dict
+    plan: InterleavedPlan, commands: Sequence[Any], expect: dict, room_of=None
 ) -> Tuple[bool, List[str]]:
     """Run the declarative checks in ``expect`` against a merged ``plan``.
 
@@ -299,6 +367,15 @@ def evaluate_expectations(
         fail("non_goto_preserved")
     if expect.get("fallback_preserves_all") and not fallback_preserves_all(plan, commands):
         fail("fallback_preserves_all")
+    # [[cmd_a, idx_a], [cmd_b, idx_b]]: action (cmd_a, idx_a) runs before (cmd_b, idx_b).
+    pos = {(pa.source_cmd, pa.source_idx): i for i, pa in enumerate(A)}
+    for (ca, ia), (cb, ib) in expect.get("action_before", []):
+        if (ca, ia) not in pos or (cb, ib) not in pos or pos[(ca, ia)] > pos[(cb, ib)]:
+            fail(f"action_before ({ca},{ia}) < ({cb},{ib})")
+    if "conflict_order_preserved" in expect:
+        got = conflict_order_preserved(A, commands, room_of)
+        if got != expect["conflict_order_preserved"]:
+            fail(f"conflict_order_preserved: got {got}")
 
     if "fallback_size" in expect and len(plan.fallback) != expect["fallback_size"]:
         fail(f"fallback_size: got {len(plan.fallback)}")
