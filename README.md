@@ -7,7 +7,7 @@ execution layer, pulled out of `RoBorregos/home2` for research work.
 
 ```
 gpsr_merger/          the contribution
-  merger.py           interleaving planner (Held-Karp DP over go_to-led segments)
+  merger.py           interleaving planner (progress-vector DP over go_to-led segments)
   bt_builder.py       builds the py_trees tree from a merged plan
   leaf_behaviours.py  the leaf behaviours (ActionLeaf, SequentialFallbackLeaf, ...)
   timeouts.py         per-action + global time budgets
@@ -15,17 +15,17 @@ gpsr_merger/          the contribution
 tests/
   _merger_helpers.py  invariant checkers + scenario harness
 scenarios/
-  merger.json         27 declarative scenarios (commands + coords + expect block)
+  merger.json         30 declarative scenarios (commands + coords + expect block)
 sim/                  MuJoCo visual simulation (see below)
 reference/
   gpsr_task_manager.py   the real ROS node, UNMODIFIED — on-robot wiring reference
-run_scenarios.py      smoke test: runs all 27 scenarios
+run_scenarios.py      smoke test: runs all 30 scenarios
 ```
 
 ## Running
 
 ```bash
-python3 run_scenarios.py       # 29/29 expected
+python3 run_scenarios.py       # 30/30 expected
 python3 run_scenarios.py -v    # also print the merged ordering per scenario
 ```
 
@@ -56,8 +56,9 @@ duck-typed and run against plain stand-ins.
 
 ### Deviation from upstream
 
-One bug fix has since been made in `merger.py`, so it no longer matches `home2`
-byte-for-byte. A segment's gripper state is now taken from its *last* gripper
+`merger.py` no longer matches `home2` byte-for-byte; `improvements.md` lists every
+change still to port. The solver is now a DP over per-command progress vectors
+instead of subset Held-Karp (same optimum, no 16-segment cap). And one bug fix: a segment's gripper state is now taken from its *last* gripper
 action (`_Segment.ends_holding`), instead of assuming pick-before-place. Upstream,
 a segment doing `place X, pick Y` with no `go_to` between was treated as ending
 empty, letting another command's pick interleave and the robot hold two items.
@@ -160,13 +161,13 @@ between two collinear locations and checks that the order changes.
 
 ### Scope of the simulation
 
-Only `showcase_merge` and `showcase_all_leaves` are fully provisioned. The 29 scenarios in
+Only `showcase_merge` and `showcase_all_leaves` are fully provisioned. The 30 scenarios in
 `scenarios/merger.json` are unit tests *for the scheduler*: they reference locations
 like `A`/`loc7` and people like `Jane` that the apartment does not contain, so their
 perception leaves correctly report `TARGET_NOT_FOUND` and the tree drops to the
 fallback branch. 13 of the 27 original ones have every `go_to` resolvable, but rendering
 the rest meaningfully would mean populating the apartment to match each one.
-`run_scenarios.py` remains the check that matters for the merger itself, and passes 29/29.
+`run_scenarios.py` remains the check that matters for the merger itself, and passes 30/30.
 
 ## Still to write
 

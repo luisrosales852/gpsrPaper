@@ -30,7 +30,7 @@ Corollaries:
 ## Commands
 
 ```bash
-python3 run_scenarios.py          # merger smoke test — expect 29/29
+python3 run_scenarios.py          # merger smoke test — expect 30/30
 python3 run_scenarios.py -v       # also print the merged ordering per scenario
 
 # Simulation (needs the venv; Python 3.14)
@@ -42,6 +42,7 @@ python3.14 -m venv .venv
 .venv/bin/python -m sim.run_sim --mode both               # -> out/side_by_side.{mp4,png}, ~1 min
 .venv/bin/python -m sim.run_sim --scenario showcase_all_leaves   # 13-leaf coverage run
 .venv/bin/pytest tests/test_sim_run.py -q                 # 12 tests, headless, <1 s
+python3 -m tests.test_progress_dp                         # DP vs Held-Karp oracle, no venv
 .venv/bin/python -m tests.test_sim_run                    # same checks without pytest
 ```
 
@@ -67,9 +68,10 @@ gpsr_merger/           THE CONTRIBUTION — no third-party deps except py_trees 
   leaf_behaviours.py   ActionLeaf, SequentialFallbackLeaf, OneShotCallbackLeaf
   timeouts.py          per-action budgets + GLOBAL_BUDGET_S (300 s)
   status.py            vendored 11-line Status enum
-scenarios/merger.json  29 declarative scheduler scenarios (commands + coords + expect)
+scenarios/merger.json  30 declarative scheduler scenarios (commands + coords + expect)
 tests/_merger_helpers.py  invariant checkers, BAML stand-in builder, expect-evaluator
 tests/test_sim_run.py     12 tests on real headless sim runs (incl. collision checks)
+tests/test_progress_dp.py differential test: progress-vector DP vs tests/_heldkarp_oracle.py
 sim/                   MuJoCo apartment; consumer of the contribution
 reference/             the real ROS node, untouched
 out/                   generated videos + run.json + comparison.json (gitignored)
@@ -80,7 +82,8 @@ out/                   generated videos + run.json + comparison.json (gitignored
 `merge(commands, locator=None, origin=None, distance=None) -> InterleavedPlan`
 
 1. `_decompose` each command into **go_to-led segments**.
-2. Held-Karp DP (`_optimal_schedule`) over segments, minimising travel (2-D
+2. Progress-vector DP (`_optimal_schedule`) over segments — state `(k, last_cmd)`,
+   `k[c]` = segments of command c done — minimising travel (2-D
    Euclidean by default, or the caller's `distance(from_name, to_name)`), with two-part
    eligibility: per-command prefix order, and a gripper-state check (only `neutral` segments may interleave while another
    command holds the gripper).
@@ -88,9 +91,13 @@ out/                   generated videos + run.json + comparison.json (gitignored
 
 Things that will bite you:
 
-- **`_M_CAP = 16`.** Above 16 segments it silently falls back to
-  `_sequential_schedule` (Held-Karp is O(2^M · M²)). Scenario
-  `m_cap_fallback_to_sequential` pins this.
+- **`_STATE_CAP = 200_000`** on `n · ∏(L_c+1)` (`_state_count`). Above it the
+  merger falls back to `_sequential_schedule`. Time is O(n² · ∏(L_c+1)), never
+  worse than Held-Karp's O(2^M · M²). One-segment commands are the worst case
+  (∏ = 2^M): `m_cap_fallback_to_sequential` (17 of them) pins the fallback,
+  `beyond_old_m_cap_still_interleaves` (18 segments) pins that the old 16-segment
+  cliff is gone. The old solver lives on as `tests/_heldkarp_oracle.py`.
+  `improvements.md` tracks what still has to be ported to home2.
 - **`LARGE_M = 1000.0`** is the sentinel cost for any edge touching an
   unresolved (`None`) coordinate. Unknown locations are avoided unless prefix
   order forces them.

@@ -10,16 +10,17 @@ order that:
   * minimizes travel between locations (2-D Euclidean by default, or any
     caller-supplied ``distance`` such as a planner's path length) using a
     precedence-constrained
-    Held-Karp DP at the *segment* granularity, allowing gripper-neutral
-    segments of any command to interleave inside another command's atomic
-    block,
+    DP over per-command progress vectors at the *segment* granularity,
+    allowing gripper-neutral segments of any command to interleave inside
+    another command's atomic block,
   * dedups back-to-back same-location ``go_to`` actions in the final plan.
 
 Pipeline:
   1. Decompose each command into go_to-led segments.
-  2. Held-Karp DP over the segments with two-part eligibility:
-       - per-command prefix order (cmd k's segments scheduled in their
-         original positions),
+  2. DP over progress vectors k = (k_0, ..., k_{n-1}), k_c = how many of
+     command c's segments are done, with two-part eligibility:
+       - per-command prefix order (implicit: command c can only advance to
+         its next segment, k_c + 1),
        - gripper-state check (only neutral segments may interleave while
          another command is mid-block).
   3. Walk the schedule back into a flat PlanAction list, then collapse
@@ -40,9 +41,13 @@ _GRIPPER_RELEASES = frozenset({"give_object", "place_object"})
 # locations unless the per-command prefix forces them into a slot.
 LARGE_M = 1000.0
 
-# Cap on the number of segments before we fall back to per-command
-# sequential. Held-Karp is O(2^M * M^2); 16 keeps the worst case sub-second.
-_M_CAP = 16
+# Cap on the DP state count, n * prod(L_c + 1), before we fall back to
+# per-command sequential. Each state has at most n successors, so this bounds
+# the work at ~n * _STATE_CAP edge relaxations (sub-second in CPython). A GPSR
+# batch (3 commands, <= 4 segments each) is at most 3 * 5^3 = 375 states; the
+# cap only triggers for batches of many one- or two-segment commands, where
+# prod(L_c + 1) approaches 2^M.
+_STATE_CAP = 200_000
 
 # Tiebreaker weight: tiny per-cross-command-switch penalty so equal-cost
 # schedules prefer per-command sequential order. Must stay well below any
@@ -192,133 +197,144 @@ def _build_holding_after(
     return result
 
 
-# Dont really understand
 def _gripper_holder(
-    S: int,
-    n_cmds: int,
-    cmd_seg_mask: Sequence[int],
+    k: Sequence[int],
     holding_after: Sequence[Sequence[bool]],
 ) -> Optional[int]:
-    """Return the cmd currently holding the gripper given subset S, or None.
+    """Return the command holding the gripper at progress vector ``k``, or None.
 
-    By the single-item invariant, at most one command can be the holder at
-    any time, so we return the first match.
+    ``holding_after[c][k[c]]`` says whether command c, after its first k[c]
+    segments, still holds what it picked. The gripper state is therefore a
+    function of ``k`` alone, which is what makes ``k`` a sufficient DP state.
+    By the single-item invariant at most one command can be the holder, so
+    we return the first match.
     """
-    for c in range(n_cmds):
-        p = (S & cmd_seg_mask[c]).bit_count()
-        if holding_after[c][p]:
+    for c, kc in enumerate(k):
+        if holding_after[c][kc]:
             return c
     return None
 
 
+def _state_count(seg_lens: Sequence[int]) -> int:
+    """Upper bound on DP states: n * prod(L_c + 1) (progress vector x last cmd)."""
+    total = 1
+    for length in seg_lens:
+        total *= length + 1
+    return total * max(len(seg_lens), 1)
+
+
 def _optimal_schedule(
     segments: Sequence[_Segment],
-    seg_cmd: Sequence[int],
-    seg_pos: Sequence[int],
-    cmd_seg_mask: Sequence[int],
+    seg_ids: Sequence[Sequence[int]],
     holding_after: Sequence[Sequence[bool]],
-    n_cmds: int,
     distance: DistanceFn,
     has_origin: bool,
 ) -> List[int]:
-    """Held-Karp DP at segment granularity.
+    """DP over per-command progress vectors, at segment granularity.
 
-    State (S, last):
-        S    — bitmask of segments already scheduled
-        last — index of the most recently scheduled segment
+    ``seg_ids[c][j]`` is the flat index (into ``segments``) of the j-th
+    segment of command c.
 
-    Eligibility for adding segment u to S:
-      1. Per-command prefix: bin(S & cmd_seg_mask[seg_cmd[u]]).count("1")
-         must equal seg_pos[u].
-      2. Gripper-state: if some command c' currently holds the gripper and
-         c' != seg_cmd[u], then segment u must be gripper-neutral
-         (segments[u].ends_holding is None).
+    State (k, last):
+        k    — progress vector, k[c] = number of command c's segments done
+        last — command that ran the most recent segment (-1 at the start).
+               The robot stands at that segment's location, segment
+               seg_ids[last][k[last] - 1].
 
-    Cost: f(S|{u}, u) = f(S, last) + edge[last][u]
-                       + epsilon * (seg_cmd[u] != seg_cmd[last]).
-    Seed: f({u}, u) = seed[u] + epsilon * seg_cmd[u].
+    Why this is enough: segments of one command run in order, so the set of
+    done segments is always "the first k[c] of each command". The holder of
+    the gripper, the eligible next segments and the robot's position all
+    follow from (k, last), so nothing about the path taken to reach a state
+    affects its cost-to-go (principle of optimality).
+
+    Transition: advance any command c with k[c] < L[c] to its next segment
+    u = seg_ids[c][k[c]], unless another command holds the gripper and u is
+    not gripper-neutral (segments[u].ends_holding is not None).
+
+    Cost: f(k + e_c, c) = f(k, last) + edge[pos(k, last)][u]
+                          + epsilon * (c != last).
+    Seed: f(e_c, c)     = seed[u] + epsilon * c.
 
     The epsilon term breaks ties (e.g. all-unknown locations where every
     edge costs LARGE_M) toward per-command sequential order. It is small
     enough to never override a real distance difference.
 
-    Complexity: O(2^M · M²). M is capped at _M_CAP by the caller.
+    Every transition raises sum(k) by one, so states are processed in layers
+    of equal sum(k); a state's successors are always in the next layer.
+    Only reachable states are ever created.
+
+    Complexity: O(n^2 * prod(L_c + 1)) time, O(n * prod(L_c + 1)) memory,
+    which never exceeds the subset (Held-Karp) DP's O(2^M * M^2) because
+    L + 1 <= 2^L. For a GPSR batch (n = 3, L_c <= 4): at most 375 states.
     """
     M = len(segments)
     if M == 0:
         return []
 
     seed, edge = _cost_matrix(segments, distance, has_origin)
+    seg_lens = [len(ids) for ids in seg_ids]
+    n = len(seg_lens)
 
     INF = float("inf")
-    full = (1 << M) - 1
+    start: Tuple[Tuple[int, ...], int] = (tuple([0] * n), -1)
+    f = {start: 0.0}
+    parent: dict = {start: None}
 
-    f = [[INF] * M for _ in range(1 << M)]
-    parent = [[-1] * M for _ in range(1 << M)]
-
-    for u in range(M):
-        if seg_pos[u] != 0:
-            continue
-        f[1 << u][u] = seed[u] + _TIEBREAK_EPSILON * seg_cmd[u]
-        parent[1 << u][u] = -1
-
-    # means 2 to the M
-    # Tracks subsets so yes or no in each one
-    for S in range(1, 1 << M):
-        holder = _gripper_holder(S, n_cmds, cmd_seg_mask, holding_after)
-        for last in range(M):
-            if not (S >> last) & 1:
-                continue
-            cur_cost = f[S][last]
-            if cur_cost == INF:
-                continue
-            for u in range(M):
-                if (S >> u) & 1:
+    layer = [start]
+    for _ in range(M):
+        next_layer: dict = {}  # insertion-ordered set of states in layer + 1
+        for state in layer:
+            k, last = state
+            cur_cost = f[state]
+            holder = _gripper_holder(k, holding_after)
+            here = seg_ids[last][k[last] - 1] if last >= 0 else -1
+            for c in range(n):
+                if k[c] == seg_lens[c]:
                     continue
-                cnt = (S & cmd_seg_mask[seg_cmd[u]]).bit_count()
-                if cnt != seg_pos[u]:
+                u = seg_ids[c][k[c]]
+                if holder is not None and holder != c and segments[u].ends_holding is not None:
                     continue
-                if holder is not None and holder != seg_cmd[u]:
-                    if segments[u].ends_holding is not None:
-                        continue
-                cand = (
-                    cur_cost
-                    + edge[last][u]
-                    + (_TIEBREAK_EPSILON if seg_cmd[u] != seg_cmd[last] else 0.0)
-                )
-                new_S = S | (1 << u)
-                if cand < f[new_S][u]:
-                    f[new_S][u] = cand
-                    parent[new_S][u] = last
+                if here < 0:
+                    step = seed[u] + _TIEBREAK_EPSILON * c
+                else:
+                    step = edge[here][u] + (_TIEBREAK_EPSILON if c != last else 0.0)
+                nxt = (k[:c] + (k[c] + 1,) + k[c + 1:], c)
+                cand = cur_cost + step
+                if cand < f.get(nxt, INF):
+                    f[nxt] = cand
+                    parent[nxt] = state
+                    next_layer[nxt] = None
+        layer = list(next_layer)
 
-    best_last = -1
+    full = tuple(seg_lens)
+    best: Optional[Tuple[Tuple[int, ...], int]] = None
     best_cost = INF
-    for u in range(M):
-        if f[full][u] < best_cost:
-            best_cost = f[full][u]
-            best_last = u
+    for c in range(n):
+        cost = f.get((full, c), INF)
+        if cost < best_cost:
+            best_cost = cost
+            best = (full, c)
 
-    if best_last < 0:
+    if best is None:
         # Pathological — DP could not realise the full schedule.
         # Per-command sequential order is always feasible.
-        return _sequential_schedule(seg_cmd, seg_pos)
+        return _sequential_schedule(segments)
 
     schedule: List[int] = []
-    S = full
-    last = best_last
-    while last != -1:
-        schedule.append(last)
-        prev = parent[S][last]
-        S ^= 1 << last
-        last = prev
+    state = best
+    while state is not None and state[1] >= 0:
+        k, last = state
+        schedule.append(seg_ids[last][k[last] - 1])
+        state = parent[state]
     schedule.reverse()
     return schedule
 
 
-def _sequential_schedule(seg_cmd: Sequence[int], seg_pos: Sequence[int]) -> List[int]:
+def _sequential_schedule(segments: Sequence[_Segment]) -> List[int]:
     """Per-command sequential order — feasible by construction (preserves
-    each command's prefix and never interleaves across atomic blocks)."""
-    return sorted(range(len(seg_cmd)), key=lambda u: (seg_cmd[u], seg_pos[u]))
+    each command's prefix and never interleaves across atomic blocks).
+    The sort is stable, so each command keeps its own segment order."""
+    return sorted(range(len(segments)), key=lambda u: segments[u].cmd)
 
 
 def merge(
@@ -353,33 +369,25 @@ def merge(
         segments_per_cmd.append(per_cmd)
         flat_segments.extend(per_cmd)
 
-    n_cmds = len(commands)
-    M = len(flat_segments)
-    if M == 0:
+    if not flat_segments:
         return InterleavedPlan(actions=[], fallback=_build_fallback(commands))
-    seg_cmd: List[int] = []
-    seg_pos: List[int] = []
-    cmd_seg_mask: List[int] = [0] * n_cmds
+
+    # seg_ids[c][j] = flat index of command c's j-th segment.
+    seg_ids: List[List[int]] = []
     gi = 0
-    for c, per_cmd in enumerate(segments_per_cmd):
-        for p in range(len(per_cmd)):
-            seg_cmd.append(c)
-            seg_pos.append(p)
-            cmd_seg_mask[c] |= 1 << gi
-            gi += 1
+    for per_cmd in segments_per_cmd:
+        seg_ids.append(list(range(gi, gi + len(per_cmd))))
+        gi += len(per_cmd)
 
     holding_after = _build_holding_after(segments_per_cmd)
 
-    if M > _M_CAP:
-        schedule = _sequential_schedule(seg_cmd, seg_pos)
+    if _state_count([len(ids) for ids in seg_ids]) > _STATE_CAP:
+        schedule = _sequential_schedule(flat_segments)
     else:
         schedule = _optimal_schedule(
             flat_segments,
-            seg_cmd,
-            seg_pos,
-            cmd_seg_mask,
+            seg_ids,
             holding_after,
-            n_cmds,
             distance,
             origin is not None,
         )
