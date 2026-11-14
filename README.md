@@ -15,17 +15,17 @@ gpsr_merger/          the contribution
 tests/
   _merger_helpers.py  invariant checkers + scenario harness
 scenarios/
-  merger.json         30 declarative scenarios (commands + coords + expect block)
+  merger.json         40 declarative scenarios (commands + coords + expect block)
 sim/                  MuJoCo visual simulation (see below)
 reference/
   gpsr_task_manager.py   the real ROS node, UNMODIFIED — on-robot wiring reference
-run_scenarios.py      smoke test: runs all 30 scenarios
+run_scenarios.py      smoke test: runs all 40 scenarios
 ```
 
 ## Running
 
 ```bash
-python3 run_scenarios.py       # 30/30 expected
+python3 run_scenarios.py       # 40/40 expected
 python3 run_scenarios.py -v    # also print the merged ordering per scenario
 ```
 
@@ -161,13 +161,13 @@ between two collinear locations and checks that the order changes.
 
 ### Scope of the simulation
 
-Only `showcase_merge` and `showcase_all_leaves` are fully provisioned. The 30 scenarios in
+Only `showcase_merge` and `showcase_all_leaves` are fully provisioned. The 40 scenarios in
 `scenarios/merger.json` are unit tests *for the scheduler*: they reference locations
 like `A`/`loc7` and people like `Jane` that the apartment does not contain, so their
 perception leaves correctly report `TARGET_NOT_FOUND` and the tree drops to the
 fallback branch. 13 of the 27 original ones have every `go_to` resolvable, but rendering
 the rest meaningfully would mean populating the apartment to match each one.
-`run_scenarios.py` remains the check that matters for the merger itself, and passes 30/30.
+`run_scenarios.py` remains the check that matters for the merger itself, and passes 40/40.
 
 ## Still to write
 
@@ -192,6 +192,9 @@ here, plain pytest is the better fit.
 - `gripper_invariant_holds` / `gripper_walk_strict` — one item at a time, drop before
   pick, and a pick is released by the same command that acquired it.
 - `fallback_preserves_all` — each per-command fallback reproduces its command in full.
+- `conflict_order_preserved` — conflicting actions of different commands (one writes
+  object/person state at a place the other reads or writes) run in issue order, so
+  the merged plan is conflict-equivalent to running the commands one by one.
 
 Scope claims to *the merger*: the "first part of the first command goes missing"
 symptom traced to upstream LLM decomposition, not to this code.

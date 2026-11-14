@@ -30,7 +30,7 @@ Corollaries:
 ## Commands
 
 ```bash
-python3 run_scenarios.py          # merger smoke test — expect 30/30
+python3 run_scenarios.py          # merger smoke test — expect 40/40
 python3 run_scenarios.py -v       # also print the merged ordering per scenario
 
 # Simulation (needs the venv; Python 3.14)
@@ -43,6 +43,7 @@ python3.14 -m venv .venv
 .venv/bin/python -m sim.run_sim --scenario showcase_all_leaves   # 13-leaf coverage run
 .venv/bin/pytest tests/test_sim_run.py -q                 # 12 tests, headless, <1 s
 python3 -m tests.test_progress_dp                         # DP vs Held-Karp oracle, no venv
+python3 -m tests.test_dependencies                        # conflict order + oracle under deps, no venv
 .venv/bin/python -m tests.test_sim_run                    # same checks without pytest
 ```
 
@@ -68,10 +69,11 @@ gpsr_merger/           THE CONTRIBUTION — no third-party deps except py_trees 
   leaf_behaviours.py   ActionLeaf, SequentialFallbackLeaf, OneShotCallbackLeaf
   timeouts.py          per-action budgets + GLOBAL_BUDGET_S (300 s)
   status.py            vendored 11-line Status enum
-scenarios/merger.json  30 declarative scheduler scenarios (commands + coords + expect)
+scenarios/merger.json  40 declarative scheduler scenarios (commands + coords + expect)
 tests/_merger_helpers.py  invariant checkers, BAML stand-in builder, expect-evaluator
 tests/test_sim_run.py     12 tests on real headless sim runs (incl. collision checks)
 tests/test_progress_dp.py differential test: progress-vector DP vs tests/_heldkarp_oracle.py
+tests/test_dependencies.py cross-command dependencies on random GPSR-shaped batches
 sim/                   MuJoCo apartment; consumer of the contribution
 reference/             the real ROS node, untouched
 out/                   generated videos + run.json + comparison.json (gitignored)
@@ -108,6 +110,14 @@ Things that will bite you:
   unknown. Scenarios cover both.
 - Everything reaches command objects through `getattr`, so plain
   `SimpleNamespace` stand-ins work. That duck-typing is load-bearing.
+- **Cross-command dependencies (on by default).** Each action has read/write
+  sets over `(objects|people, place)` (`_EFFECTS`, `_action_effects`); segments of
+  different commands that conflict keep issue order (`_build_needs` → `needs[c][j]
+  = ((d, m), ...)`, one `continue` in the DP). Keyed by **place, not name**, on
+  purpose (parser naming is inconsistent). `room_of(name) -> room` (optional hook,
+  like `distance=`) makes a room overlap the spots inside it; without it only equal
+  names conflict. `dependencies=False` = travel-only, for ablations. Sim passes
+  `World.room_of` (zones). `scenarios/merger.json` `dep_*` pin the cases.
 - **`distance=` is the only metric hook.** `merge(..., distance=fn)` replaces
   `_euclidean`. It takes location **names**, `fn(from_name | None, to_name)`, where
   `None` is the robot origin (only asked when `origin` is not None) — the same
@@ -192,6 +202,9 @@ by name in the paper:
 - `gripper_invariant_holds` / `gripper_walk_strict` — one item at a time, drop
   before pick; strict also requires the *same* command to release its own pick.
 - `fallback_preserves_all` — each per-command fallback reproduces its command.
+- `conflict_order_preserved` — every conflicting pair of actions of different
+  commands runs in issue order, i.e. the plan is conflict-equivalent to sequential
+  execution. Re-derived at action level, independent of the segment table.
 
 `tests/test_sim_run.py` re-witnesses these at execution time, plus
 `test_merged_travels_less_than_sequential` and
@@ -204,15 +217,19 @@ both orderings, and one run with injected failures) and
 `test_planned_cost_is_the_driven_metric`.
 
 **Adding a merger scenario:** append an object to `scenarios/merger.json` with
-`commands`, optional `coords` / `origin`, and an `expect` block. Every key in
+`commands`, optional `coords` / `origin` / `distance_overrides` / `rooms` (`{place: room}`
+→ `room_of`) / `dependencies` (false = travel-only), and an `expect` block.
+`tests/_merger_helpers.merge_kwargs` turns those into `merge()` arguments. Every key in
 `expect` is optional; the supported checks are exactly the keys handled in
 `tests/_merger_helpers.evaluate_expectations` (`plan_kinds`, `go_to_order`,
-`location_visit_counts`, `precedence_per_cmd`, `gripper_walk_strict`, …). Add a
+`location_visit_counts`, `precedence_per_cmd`, `gripper_walk_strict`,
+`action_before`, `conflict_order_preserved`, …). Add a
 new check there rather than writing a bespoke test.
 
-**Adding a leaf kind** means touching three places: `timeouts.ACTION_TIMEOUTS`,
-a same-named method on `sim/handlers.SimSubtaskHandler`, and `ALL_KINDS` in
-`tests/test_sim_run.py`.
+**Adding a leaf kind** means touching four places: `timeouts.ACTION_TIMEOUTS`,
+a same-named method on `sim/handlers.SimSubtaskHandler`, `ALL_KINDS` in
+`tests/test_sim_run.py`, and `merger._EFFECTS` if it reads or changes objects or
+people (a kind missing there is assumed to touch no shared state).
 
 ## Scope limits worth remembering
 

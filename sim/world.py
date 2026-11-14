@@ -120,6 +120,17 @@ class World:
             hit = self.locations.get(_norm(name).replace(" ", "_"))
         return None if hit is None else (hit[0], hit[1])
 
+    def room_of(self, name: str) -> Optional[str]:
+        """Zone containing a location, or None. The merger's ``room_of`` hook."""
+        xy = self.locator(name)
+        if xy is None:
+            return None
+        for zone in self.zones:
+            x0, y0, x1, y1 = zone["rect"]
+            if x0 <= xy[0] <= x1 and y0 <= xy[1] <= y1:
+                return zone["name"]
+        return None
+
     def pose(self, name: str) -> Optional[Tuple[float, float, float]]:
         """Full (x, y, yaw) target pose for a location name."""
         hit = self.locations.get(name)
