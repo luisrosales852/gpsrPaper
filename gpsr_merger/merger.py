@@ -373,7 +373,9 @@ def _optimal_schedule(
                     step = seed[u] + _TIEBREAK_EPSILON * c
                 else:
                     step = edge[here][u] + (_TIEBREAK_EPSILON if c != last else 0.0)
-                nxt = (k[:c] + (k[c] + 1,) + k[c + 1:], c)
+                new_k = list(k)
+                new_k[c] += 1
+                nxt = (tuple(new_k), c)
                 cand = cur_cost + step
                 if cand < f.get(nxt, INF):
                     f[nxt] = cand
