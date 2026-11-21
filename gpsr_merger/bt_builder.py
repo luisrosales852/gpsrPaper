@@ -9,16 +9,16 @@ Tree shape:
       │           ├── ...
       │           └── Retry(2) ▸ Timeout(action_t) ▸ ActionLeaf(aN)
       └── Sequence "sequential_fallback"
-            ├── SequentialFallbackLeaf(cmd0)
-            ├── SequentialFallbackLeaf(cmd1)
-            └── ...
+            └── SequentialFallbackLeaf(every command)
 
 Failure is absolute in the interleaved branch: any leaf — gripper or
 gripper-neutral — that exhausts its Retry attempts (or the global
 Timeout firing) causes the inner Sequence to return FAILURE, and the
 Selector advances to ``sequential_fallback``. The fallback then runs
-each source command's actions in original order (within-command
-failures are logged but ignored so every command still gets a chance).
+each source command's actions in original order, commands in issue order
+except that the one holding an object finishes before another picks
+(within-command failures are logged but ignored so every command still
+gets a chance).
 Per-action results are forwarded via ``on_action_complete`` so the
 HRI command-history reflects partial progress regardless of branch.
 """
@@ -115,15 +115,12 @@ def build_tree(
     fallback_seq = py_trees.composites.Sequence(name="sequential_fallback", memory=True)
     if on_fallback_entry is not None and any(plan.fallback):
         fallback_seq.add_child(OneShotCallbackLeaf(on_fallback_entry, name="announce_fallback"))
-    for cmd_idx, per_cmd in enumerate(plan.fallback):
-        if not per_cmd:
-            continue
+    if any(plan.fallback):
         fallback_seq.add_child(
             SequentialFallbackLeaf(
-                per_cmd,
+                plan.fallback,
                 subtask_handlers,
                 on_complete=on_action_complete,
-                name=f"fallback_cmd{cmd_idx}",
                 is_completed=is_completed,
                 on_start=on_action_start,
             )

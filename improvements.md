@@ -1,8 +1,40 @@
 # Improvements to port to the robot (home2)
 
-Changes made in `gpsrPaper/gpsr_merger/merger.py` that are **not yet in
+Changes made in `gpsrPaper/gpsr_merger/` that are **not yet in
 `RoBorregos/home2`** (`task_manager/task_manager/gpsr/merger.py`, branch
 `qwenUpgrade`). Newest first.
+
+---
+
+## 6. Fallback finishes the held object first — 2026-11-20
+
+### What changed and why
+
+The sequential fallback ran commands in issue order regardless of the gripper.
+Reproduced in the sim: c1 picks the book, c2's `count` fails, the fallback starts
+c0, whose pick fails with the book in hand, then c0's `place_object` puts **the
+book** at the dishwasher and c1's place finds an empty gripper. One perception
+failure cost two manipulation commands and misplaced an object.
+
+Now `SequentialFallbackLeaf` is one leaf for all commands and runs them in
+`fallback_order`: issue order, except the holder runs right before the first
+other command that still has to pick. Commands that do not pick (counting,
+answering) keep their place before it, so conflict order is only broken when the
+single gripper forces it. Without `is_completed` the holder is unknown and the
+order stays issue order.
+
+### How to port it to home2
+
+Copy `leaf_behaviours.py` and `bt_builder.py`. `build_tree`'s signature is
+unchanged; the tree now has one fallback leaf named `fallback` instead of
+`fallback_cmd{i}`. `GPSRTM` already passes `is_completed` (from `_completed`),
+which is what identifies the holder.
+
+### Verifying on the robot
+
+Hardcode a batch where c1 picks and a later gripper-free action of c2 is forced
+to fail (e.g. count a category that is not there). The robot must place c1's
+object before attempting c0's pick.
 
 ---
 

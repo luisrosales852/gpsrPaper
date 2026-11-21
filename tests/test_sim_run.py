@@ -19,12 +19,15 @@ from argparse import Namespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from gpsr_merger.leaf_behaviours import fallback_order  # noqa: E402
+from gpsr_merger.merger import merge  # noqa: E402
 from gpsr_merger.timeouts import GLOBAL_BUDGET_S  # noqa: E402
 from sim.routing import (  # noqa: E402
     PERSON_RADIUS, ROBOT_RADIUS, VisGraphRouter, furniture_rects)
 from sim.robot import FOLLOW_GAP  # noqa: E402
 from sim.run_sim import load_scenario, run_once  # noqa: E402
 from sim.world import World  # noqa: E402
+from tests._merger_helpers import build_commands  # noqa: E402
 
 ALL_KINDS = {
     "go_to", "pick_object", "place_object", "give_object", "find_person",
@@ -56,10 +59,11 @@ def _args(out, fail=None):
 
 
 def run(mode, scenario="showcase_all_leaves", fail=None):
-    """One headless run per (scenario, mode, fail), memoised across tests."""
-    key = (scenario, mode, fail)
+    """One headless run per (scenario, mode, fail), memoised across tests.
+    ``scenario`` is a name in scenarios_visual.json or a scenario dict."""
+    sc = scenario if isinstance(scenario, dict) else load_scenario(scenario)
+    key = (sc["name"], mode, fail)
     if key not in _cache:
-        sc = load_scenario(scenario)
         with tempfile.TemporaryDirectory() as td:
             summary = run_once(sc, mode, os.path.join(td, mode), _args(td, fail))
             import json
@@ -87,7 +91,11 @@ def test_gripper_single_item_invariant_in_execution():
     """Sim-side witness: the gripper never holds two things, and every pick is
     released. ``pick_object`` hard-fails on a double pick, so a violating
     schedule would show up as a FAILURE status here, not just a failed assert."""
-    summary, log, _ = run("merged")
+    _, log, _ = run("merged")
+    _assert_single_item(log)
+
+
+def _assert_single_item(log):
     held = None
     for e in _ends(log):
         if e["kind"] == "pick_object" and e["status"] == "EXECUTION_SUCCESS":
@@ -98,6 +106,51 @@ def test_gripper_single_item_invariant_in_execution():
             assert held == e["cmd"], "a pick was released by a different command"
             held = None
     assert held is None, "run ended still holding an object"
+
+
+# c1 picks the book, then a failing count of c2 drops the run into the fallback.
+FALLBACK_HOLDER = {"name": "fallback_holder", "origin": [-3.9, 2.5], "commands": [
+    [{"action": "go_to", "location_to_go": "kitchen"}, {"action": "pick_object", "object_to_pick": "cup"},
+     {"action": "go_to", "location_to_go": "dishwasher"}, {"action": "place_object"}],
+    [{"action": "go_to", "location_to_go": "bedroom"}, {"action": "pick_object", "object_to_pick": "book"},
+     {"action": "go_to", "location_to_go": "garage"}, {"action": "place_object"}],
+    [{"action": "go_to", "location_to_go": "living_room"}, {"action": "count", "target_to_count": "people"},
+     {"action": "go_to", "location_to_go": "start_location"},
+     {"action": "say_with_context", "user_instruction": "how many people"}],
+]}
+
+
+def test_fallback_finishes_the_held_object_first():
+    """A failure while c1 holds the book: the fallback delivers the book before
+    c0 picks the cup, so both manipulation commands still succeed."""
+    _, log, _ = run("merged", FALLBACK_HOLDER, ("2.1:3",))
+    ends = _ends(log)
+    assert any(e["branch"] == "sequential_fallback" for e in ends)
+    _assert_single_item(log)
+    manipulation = [e for e in ends if e["kind"] in ("pick_object", "place_object")]
+    assert all(e["status"] == "EXECUTION_SUCCESS" for e in manipulation)
+    places = [(e["cmd"], e["result"]) for e in manipulation if e["kind"] == "place_object"]
+    assert places == [(1, "book"), (0, "cup")], places
+
+
+def test_fallback_order_moves_the_holder_only_as_far_as_needed():
+    """Issue order, except the holder runs before the first other command that
+    picks. A command with no pick (c0 counting) keeps its place before it."""
+    def g(place):
+        return {"action": "go_to", "location_to_go": place}
+    count = [g("table"), {"action": "count", "target_to_count": "cups"}]
+    fetch = [g("A"), {"action": "pick_object", "object_to_pick": "cup"}, g("table"), {"action": "place_object"}]
+    other = [g("B"), {"action": "pick_object", "object_to_pick": "book"}, g("C"), {"action": "place_object"}]
+    done = {(1, 0), (1, 1)}  # c1 has picked, not placed
+
+    def is_completed(pa):
+        return (pa.source_cmd, pa.source_idx) in done
+
+    plan = merge(build_commands([count, fetch, other]))
+    assert fallback_order(plan.fallback, is_completed) == [0, 1, 2]
+    plan = merge(build_commands([other, fetch, count]))
+    assert fallback_order(plan.fallback, is_completed) == [1, 0, 2]
+    assert fallback_order(plan.fallback, None) == [0, 1, 2]
 
 
 def test_per_command_order_preserved():

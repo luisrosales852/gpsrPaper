@@ -41,7 +41,7 @@ python3.14 -m venv .venv
 .venv/bin/python -m sim.run_sim --mode both --no-video    # event log only, ~0.1 s
 .venv/bin/python -m sim.run_sim --mode both               # -> out/side_by_side.{mp4,png}, ~1 min
 .venv/bin/python -m sim.run_sim --scenario showcase_all_leaves   # 13-leaf coverage run
-.venv/bin/pytest tests/test_sim_run.py -q                 # 15 tests, headless, <1 s
+.venv/bin/pytest tests/test_sim_run.py -q                 # 17 tests, headless, <1 s
 python3 -m tests.test_progress_dp                         # DP vs Held-Karp + named-start brute force, no venv
 python3 -m tests.test_dependencies                        # conflict order + oracle under deps, no venv
 python3 bench_runtime.py [--latex]                         # paper's planner-runtime table, no venv
@@ -72,7 +72,7 @@ gpsr_merger/           THE CONTRIBUTION — no third-party deps except py_trees 
   status.py            vendored 11-line Status enum
 scenarios/merger.json  57 declarative scheduler scenarios (commands + coords + expect)
 tests/_merger_helpers.py  invariant checkers, BAML stand-in builder, expect-evaluator
-tests/test_sim_run.py     15 tests on real headless sim runs (incl. collision checks)
+tests/test_sim_run.py     17 tests on real headless sim runs (incl. collision checks)
 tests/test_progress_dp.py differential test: progress-vector DP vs tests/_heldkarp_oracle.py
 tests/test_dependencies.py cross-command dependencies on random GPSR-shaped batches
 sim/                   MuJoCo apartment; consumer of the contribution
@@ -159,7 +159,7 @@ Selector "gpsr_root" (memory)
   ├── Timeout(GLOBAL_BUDGET_S) ▸ Sequence "interleaved"
   │     └── Retry(2) ▸ Timeout(timeout_for(kind)) ▸ ActionLeaf   (per action)
   └── Sequence "sequential_fallback"
-        └── SequentialFallbackLeaf  (per command; always returns SUCCESS)
+        └── SequentialFallbackLeaf  (every command, fallback_order; always SUCCESS)
 ```
 
 - **Handler dispatch is by method name.** `_resolve_method(kind, handlers)` picks
@@ -177,6 +177,13 @@ Selector "gpsr_root" (memory)
 - `is_completed` enables *resume* rather than restart in the fallback: a
   completed non-`go_to` is skipped, and a `go_to` is skipped only when its whole
   following segment is already done.
+- **Fallback order** (`leaf_behaviours.fallback_order`, decided when the fallback
+  starts): issue order, except the command holding an object (completed pick, no
+  completed release) runs right before the first *other* command that still has
+  to pick. Holder-first would be simpler but reorders gripper-free commands too,
+  breaking conflict order for no physical reason. Pinned by
+  `test_fallback_finishes_the_held_object_first` (sim, injected failure while
+  holding) and `test_fallback_order_moves_the_holder_only_as_far_as_needed`.
 
 ### sim/
 
