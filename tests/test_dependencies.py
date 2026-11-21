@@ -27,6 +27,7 @@ from tests._merger_helpers import (  # noqa: E402
     build_commands,
     conflict_order_preserved,
     gripper_invariant_holds,
+    make_distance,
     make_locator,
     make_room_of,
     planned_travel,
@@ -273,6 +274,28 @@ def test_origin_name_only_adds_the_drive_back():
     print(f"origin_name: {inserted} inserted go_tos; acting at the start shortens "
           f"{improved}/{N_RANDOM} plans, by {saved / max(improved, 1):.2f} m on average")
     assert inserted > 0 and improved > 0
+
+
+def test_unreachable_origin_name_is_ignored():
+    """A start name that distance() cannot reach (unknown, or no path) plans
+    exactly like no name: no go_to that would fail, no keying at that place."""
+    rng = random.Random(SEED + 3)
+    room_of = make_room_of(ROOMS)
+    full = lambda p: ([(x.source_cmd, x.source_idx, x.action.action) for x in p.actions],  # noqa: E731
+                      [[(x.source_cmd, x.source_idx) for x in fb] for fb in p.fallback])
+    for _ in range(N_RANDOM):
+        commands = build_commands(_random_batch(rng))
+        origin = (rng.uniform(0, 9), rng.uniform(-3, 3)) if rng.random() < 0.7 else None
+        coords = {**COORDS, "blocked": [4, 0]}
+        base = make_distance(coords, [], origin)
+
+        def distance(a, b):
+            return None if "blocked" in (a, b) else base(a, b)
+
+        kw = dict(origin=origin, distance=distance, room_of=room_of)
+        plain = full(merge(commands, **kw))
+        for name in ("nowhere", "blocked"):
+            assert full(merge(commands, origin_name=name, **kw)) == plain, (name, origin)
 
 
 def test_needs_only_point_at_earlier_commands():

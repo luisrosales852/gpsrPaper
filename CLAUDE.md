@@ -30,7 +30,7 @@ Corollaries:
 ## Commands
 
 ```bash
-python3 run_scenarios.py          # merger smoke test — expect 54/54
+python3 run_scenarios.py          # merger smoke test — expect 57/57
 python3 run_scenarios.py -v       # also print the merged ordering per scenario
 
 # Simulation (needs the venv; Python 3.14)
@@ -70,7 +70,7 @@ gpsr_merger/           THE CONTRIBUTION — no third-party deps except py_trees 
   leaf_behaviours.py   ActionLeaf, SequentialFallbackLeaf, OneShotCallbackLeaf
   timeouts.py          per-action budgets + GLOBAL_BUDGET_S (300 s)
   status.py            vendored 11-line Status enum
-scenarios/merger.json  54 declarative scheduler scenarios (commands + coords + expect)
+scenarios/merger.json  57 declarative scheduler scenarios (commands + coords + expect)
 tests/_merger_helpers.py  invariant checkers, BAML stand-in builder, expect-evaluator
 tests/test_sim_run.py     15 tests on real headless sim runs (incl. collision checks)
 tests/test_progress_dp.py differential test: progress-vector DP vs tests/_heldkarp_oracle.py
@@ -123,7 +123,8 @@ Things that will bite you:
   there; the DP prices it as driven (return `distance(place, origin_name)`,
   then from `origin_name`; from `None`, i.e. `seed`, while the robot has not
   moved), and it makes the origin known when `origin=None`.
-  `planned_travel(..., origin_name)` re-derives that drive;
+  A name `distance` cannot reach is ignored (`_reachable`), so a typo plans
+  like no name. `planned_travel(..., origin_name)` re-derives that drive;
   `test_named_start_is_priced_as_driven` checks it against brute force. Each headless command's fallback starts with it too, and
   those actions' dependency effects are keyed at `origin_name` instead of `None`
   (`_annotate_effects(start=)`; the checker takes the same `start`). Sim passes
@@ -256,7 +257,7 @@ people (a kind missing there is assumed to touch no shared state).
 
 ## Scope limits worth remembering
 
-- Only `showcase_merge`, `showcase_all_leaves` and `showcase_exits` are fully provisioned in the apartment. The 54
+- Only `showcase_merge`, `showcase_all_leaves` and `showcase_exits` are fully provisioned in the apartment. The 57
   scenarios in `scenarios/merger.json` are unit tests *for the scheduler*; they
   reference locations like `A`/`loc7` and people like `Jane` that do not exist in
   the apartment, so their perception leaves correctly report `TARGET_NOT_FOUND`.

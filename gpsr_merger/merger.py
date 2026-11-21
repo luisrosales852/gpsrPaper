@@ -471,11 +471,14 @@ def merge(
     inside it; without it only identical names conflict.
     ``origin_name`` names the robot's start; a ``go_to`` to it is inserted
     before actions that precede a command's first ``go_to``, and it prices
-    the origin when ``origin`` is None.
+    the origin when ``origin`` is None. It is ignored if ``distance`` cannot
+    reach it.
     """
     if distance is None:
         loc_fn: Locator = locator if locator is not None else (lambda _: None)
         distance = _euclidean_distance(loc_fn, origin)
+    if origin_name is not None and not _reachable(origin_name, commands, distance, origin is not None):
+        origin_name = None
     if origin is None and origin_name is not None:
         base = distance
 
@@ -528,6 +531,18 @@ def merge(
     fallback = [_collapse_redundant_go_tos(per) for per in _build_fallback(commands, origin_name)]
 
     return InterleavedPlan(actions=actions, fallback=fallback)
+
+
+def _reachable(origin_name: str, commands: Sequence[Any], distance: DistanceFn, has_pose: bool) -> bool:
+    """Whether ``distance`` can price a drive to ``origin_name``: from the robot's
+    pose if known, otherwise from the start to some place in the batch."""
+    if has_pose:
+        costs = [distance(None, origin_name)]
+    else:
+        places = {getattr(a, "location_to_go", None)
+                  for cmd in commands for a in getattr(cmd, "commands", [])}
+        costs = [distance(origin_name, p) for p in places if isinstance(p, str) and p != origin_name]
+    return any(d is not None and d < LARGE_M for d in costs)
 
 
 def _flatten(

@@ -39,6 +39,19 @@ it, so `pick cup → go_to A → place → pick book` becomes
 - **`origin=None` + a name** makes the origin known: `distance(origin_name, ·)`
   replaces `distance(None, ·)`, so the plan equals the known-origin plan instead
   of pushing a return to `LARGE_M` (`here_named_start_prices_unknown_origin`).
+- **Unreachable name = no name.** If `distance` cannot price a drive to
+  `origin_name` (`distance(None, origin_name)` with a known pose, or from it to
+  any place in the batch without one), `merge()` ignores it (`_reachable`).
+  Otherwise one typo or a blocked start would put a failing `go_to` in the plan,
+  fail the interleaved branch after its retries, drop the batch to the
+  sequential fallback (which repeats the failing `go_to`), price every trip to
+  the start at `LARGE_M`, and key forced-late headless actions at a place the
+  robot never reaches. Pinned by `here_named_start_unknown_name_falls_back`,
+  `here_named_start_unreachable_falls_back`,
+  `here_named_start_unknown_name_origin_none` and
+  `test_unreachable_origin_name_is_ignored` (300 batches: plan and fallback
+  identical to no name). Silent on purpose: home2 can log by checking the name
+  with `_resolve_xy` before calling `merge()`.
 - **Fallback.** Each headless command's fallback starts with the inserted
   `go_to`, since the fallback runs after a failure, away from the start.
   `sim.run_sim.sequential_plan` drops it for the very first command only.
@@ -282,7 +295,7 @@ plans change once this is ported**, but only for batches with a real conflict.
 
 1. Before deploying, in gpsrPaper:
    ```bash
-   python3 run_scenarios.py               # 54/54, includes the 10 dep_* scenarios
+   python3 run_scenarios.py               # 57/57, includes the 10 dep_* scenarios
    python3 -m tests.test_dependencies     # invariants + oracle under dependencies
    python3 -m tests.test_progress_dp
    ```

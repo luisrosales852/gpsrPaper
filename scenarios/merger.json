@@ -4117,5 +4117,230 @@
         "kitchen"
       ]
     }
+  },
+  {
+    "name": "here_named_start_unknown_name_falls_back",
+    "description": "origin_name 'S' is not a known place: merge() ignores it and plans exactly like here_forced_late_by_gripper (no go_to(S) that would fail on the robot).",
+    "commands": [
+      [
+        {
+          "action": "pick_object",
+          "object_to_pick": "cup"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "A"
+        },
+        {
+          "action": "place_object"
+        }
+      ],
+      [
+        {
+          "action": "pick_object",
+          "object_to_pick": "book"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "B"
+        },
+        {
+          "action": "place_object"
+        }
+      ]
+    ],
+    "coords": {
+      "A": [
+        5,
+        0
+      ],
+      "B": [
+        6,
+        0
+      ]
+    },
+    "origin": [
+      0,
+      0
+    ],
+    "origin_name": "S",
+    "expect": {
+      "per_command_order": true,
+      "non_goto_preserved": true,
+      "gripper_invariant": true,
+      "gripper_walk_strict": true,
+      "go_to_order": [
+        "A",
+        "B"
+      ],
+      "source_idx_order": [
+        0,
+        1,
+        2,
+        0,
+        1,
+        2
+      ],
+      "fallback_source_idx": [
+        [
+          0,
+          1,
+          2
+        ],
+        [
+          0,
+          1,
+          2
+        ]
+      ]
+    }
+  },
+  {
+    "name": "here_named_start_unreachable_falls_back",
+    "description": "'S' is a known place but distance() has no path to it from the robot: same fallback as an unknown name.",
+    "commands": [
+      [
+        {
+          "action": "pick_object",
+          "object_to_pick": "cup"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "A"
+        },
+        {
+          "action": "place_object"
+        }
+      ],
+      [
+        {
+          "action": "pick_object",
+          "object_to_pick": "book"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "B"
+        },
+        {
+          "action": "place_object"
+        }
+      ]
+    ],
+    "coords": {
+      "A": [
+        5,
+        0
+      ],
+      "B": [
+        6,
+        0
+      ],
+      "S": [
+        0,
+        0
+      ]
+    },
+    "origin": [
+      0,
+      0
+    ],
+    "origin_name": "S",
+    "distance_overrides": [
+      [
+        "origin",
+        "S",
+        null
+      ]
+    ],
+    "expect": {
+      "per_command_order": true,
+      "non_goto_preserved": true,
+      "gripper_invariant": true,
+      "gripper_walk_strict": true,
+      "go_to_order": [
+        "A",
+        "B"
+      ],
+      "source_idx_order": [
+        0,
+        1,
+        2,
+        0,
+        1,
+        2
+      ],
+      "fallback_source_idx": [
+        [
+          0,
+          1,
+          2
+        ],
+        [
+          0,
+          1,
+          2
+        ]
+      ]
+    }
+  },
+  {
+    "name": "here_named_start_unknown_name_origin_none",
+    "description": "Unknown origin_name with origin=None: no place prices from 'S', so it is ignored and the plan equals here_with_origin_none.",
+    "commands": [
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "A"
+        },
+        {
+          "action": "count",
+          "target_to_count": "cups"
+        }
+      ],
+      [
+        {
+          "action": "answer_question"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "B"
+        },
+        {
+          "action": "count",
+          "target_to_count": "cups"
+        }
+      ]
+    ],
+    "coords": {
+      "A": [
+        5,
+        0
+      ],
+      "B": [
+        6,
+        0
+      ]
+    },
+    "origin": null,
+    "origin_name": "S",
+    "expect": {
+      "per_command_order": true,
+      "non_goto_preserved": true,
+      "gripper_invariant": true,
+      "source_cmd_order": [
+        1,
+        1,
+        1,
+        0,
+        0
+      ],
+      "source_idx_order": [
+        0,
+        1,
+        2,
+        0,
+        1
+      ]
+    }
   }
 ]
