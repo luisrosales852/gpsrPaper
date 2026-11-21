@@ -116,7 +116,7 @@ def run_once(sc: dict, mode: str, out_dir: str, args) -> dict:
     distance = merger_distance(world, router, origin)
     origin_name = start_name(world, origin)
     plan = merge(commands, origin=origin, distance=distance, room_of=world.room_of,
-                 origin_name=origin_name)
+                 origin_name=origin_name, holding_penalty=getattr(args, "holding_penalty", 0.0))
     if mode == "sequential":
         exec_plan = sequential_plan(plan)
     else:
@@ -225,6 +225,8 @@ def main() -> int:
     ap.add_argument("--no-video", action="store_true", help="event log only, no rendering")
     ap.add_argument("--print-tree", action="store_true")
     ap.add_argument("--dry-run", action="store_true", help="print the merged order and exit")
+    ap.add_argument("--holding-penalty", type=float, default=0.0,
+                    help="extra cost per metre driven while holding (paper's lambda)")
     args = ap.parse_args()
 
     sc = load_scenario(args.scenario)
@@ -238,7 +240,7 @@ def main() -> int:
         distance = merger_distance(world, router, origin)
         origin_name = start_name(world, origin)
         plan = merge(commands, origin=origin, distance=distance, room_of=world.room_of,
-                     origin_name=origin_name)
+                     origin_name=origin_name, holding_penalty=args.holding_penalty)
         seq = sequential_plan(plan)
         print(f"scenario: {sc['name']}  ({len(commands)} commands, origin={origin})\n")
         print("MERGED     :", describe_plan(plan))

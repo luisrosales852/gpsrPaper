@@ -4342,5 +4342,128 @@
         1
       ]
     }
+  },
+  {
+    "name": "holding_penalty_zero_carries_through_bedroom",
+    "commands": [
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "kitchen"
+        },
+        {
+          "action": "pick_object",
+          "object_to_pick": "cup"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "living_room"
+        },
+        {
+          "action": "place_object"
+        }
+      ],
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "bedroom"
+        },
+        {
+          "action": "count",
+          "target_to_count": "people"
+        }
+      ]
+    ],
+    "coords": {
+      "kitchen": [
+        10,
+        0
+      ],
+      "bedroom": [
+        11,
+        2
+      ],
+      "living_room": [
+        0,
+        2
+      ]
+    },
+    "origin": [
+      0,
+      0
+    ],
+    "description": "Plain travel: picking the cup first and counting in the bedroom on the way is 0.38 m shorter (23.24 vs 23.62 m) but carries the cup 13.24 m instead of 10.20 m.",
+    "expect": {
+      "per_command_order": true,
+      "non_goto_preserved": true,
+      "gripper_invariant": true,
+      "go_to_order": [
+        "kitchen",
+        "bedroom",
+        "living_room"
+      ]
+    }
+  },
+  {
+    "name": "holding_penalty_counts_before_picking",
+    "commands": [
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "kitchen"
+        },
+        {
+          "action": "pick_object",
+          "object_to_pick": "cup"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "living_room"
+        },
+        {
+          "action": "place_object"
+        }
+      ],
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "bedroom"
+        },
+        {
+          "action": "count",
+          "target_to_count": "people"
+        }
+      ]
+    ],
+    "coords": {
+      "kitchen": [
+        10,
+        0
+      ],
+      "bedroom": [
+        11,
+        2
+      ],
+      "living_room": [
+        0,
+        2
+      ]
+    },
+    "origin": [
+      0,
+      0
+    ],
+    "holding_penalty": 0.5,
+    "description": "Same batch with holding_penalty 0.5 (any value above ~0.13 flips it): count first, then pick the cup on the way back.",
+    "expect": {
+      "per_command_order": true,
+      "non_goto_preserved": true,
+      "gripper_invariant": true,
+      "go_to_order": [
+        "bedroom",
+        "kitchen",
+        "living_room"
+      ]
+    }
   }
 ]

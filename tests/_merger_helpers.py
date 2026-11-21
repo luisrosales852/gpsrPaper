@@ -134,14 +134,16 @@ _ESCORT_DEST = {"follow_person_until": "destination", "guide_person_to": "destin
 
 
 def planned_travel(plan_actions: Sequence[PlanAction], commands: Sequence[Any], distance,
-                   has_origin: bool, origin_name=None) -> float:
+                   has_origin: bool, origin_name=None, holding_penalty=0.0) -> float:
     """The merger's travel objective, re-derived per action: go_to hops priced
     from where the robot last ended (escort destinations included), and actions
     before a command's first go_to priced at the origin (driven by the inserted
-    go_to when ``origin_name`` is given). Unknown hops count 0."""
+    go_to when ``origin_name`` is given). Hops driven while holding count
+    ``1 + holding_penalty``. Unknown hops count 0."""
     origin = object()
     pos = origin
     total = 0.0
+    held = False
 
     def hop(a, b):
         if a == b:
@@ -155,20 +157,22 @@ def planned_travel(plan_actions: Sequence[PlanAction], commands: Sequence[Any], 
 
     for pa in plan_actions:
         kind = getattr(pa.action, "action", "")
+        weight = 1.0 + holding_penalty if held else 1.0
         if pa.source_idx == -1 and origin_name is None:
-            total += hop(pos, origin)
+            total += weight * hop(pos, origin)
             pos = origin
             continue
         if kind == "go_to":
             tgt = getattr(pa.action, "location_to_go", None)
             if tgt is not None:
-                total += hop(pos, tgt)
+                total += weight * hop(pos, tgt)
                 pos = tgt
             continue
         before = list(getattr(commands[pa.source_cmd], "commands", []))[: pa.source_idx]
         if origin_name is None and all(getattr(x, "action", "") != "go_to" for x in before):
-            total += hop(pos, origin)
+            total += weight * hop(pos, origin)
             pos = origin
+        held = (held or pa.requires_gripper) and not pa.releases_gripper
         dest = getattr(pa.action, _ESCORT_DEST.get(kind, ""), None) if kind in _ESCORT_DEST else None
         if isinstance(dest, str) and dest.strip():
             pos = dest
@@ -246,6 +250,8 @@ def merge_kwargs(sc: dict) -> dict:
         kwargs["dependencies"] = bool(sc["dependencies"])
     if "origin_name" in sc:
         kwargs["origin_name"] = sc["origin_name"]
+    if "holding_penalty" in sc:
+        kwargs["holding_penalty"] = sc["holding_penalty"]
     return kwargs
 
 

@@ -6,6 +6,50 @@ Changes made in `gpsrPaper/gpsr_merger/` that are **not yet in
 
 ---
 
+## 7. Holding penalty (λ) — 2026-11-21
+
+### What changed and why
+
+Interleaving runs other commands' gripper-free segments while one command holds
+an object, so merged plans carry objects further than sequential ones: 7.38 m vs
+6.22 m per batch on 1000 random GPSR-shaped batches (`bench_holding.py`).
+Carrying is where failures cost most (a failure while holding used to lose two
+commands, §6) and where the 300 s limit hurts (an undelivered object earns
+nothing).
+
+`merge(..., holding_penalty=λ)` makes every metre driven while holding cost
+`1 + λ`. The DP already knows the holder in each state (gripper rule), so it is
+one line and stays exact (`test_holding_penalty_is_exact`, brute force over
+every feasible order). λ = 0 is the old objective.
+
+| | travel m | carried m |
+|---|---|---|
+| sequential | 29.08 | 6.22 |
+| λ = 0 | 18.30 | 7.38 |
+| λ = 0.5 | 18.48 | 6.52 |
+| λ = 1 | 18.76 | 6.14 |
+| λ = 2 | 18.94 | 6.01 |
+
+At λ = 1 the merged plan carries less than sequential and still drives 35% less.
+Showcases are unchanged at the default λ = 0 (and `showcase_all_leaves` keeps its
+plan even at λ = 1: the side table is on the cup's way).
+
+Not modelled: displacement inside a segment while holding (an escort with an
+object, the paper's ρ), κ and τ.
+
+### How to port it to home2
+
+File copy. Pass `holding_penalty=` from `GPSRTM._execute_interleaved_batch`
+once a value is chosen; omitting it keeps today's plans.
+
+### Verifying on the robot
+
+`holding_penalty_counts_before_picking` with real places: a fetch whose pick is
+near a gripper-free task off the delivery route. With λ = 0.5 the robot must do
+the other task before picking.
+
+---
+
 ## 6. Fallback finishes the held object first — 2026-11-20
 
 ### What changed and why
@@ -327,7 +371,7 @@ plans change once this is ported**, but only for batches with a real conflict.
 
 1. Before deploying, in gpsrPaper:
    ```bash
-   python3 run_scenarios.py               # 57/57, includes the 10 dep_* scenarios
+   python3 run_scenarios.py               # 59/59, includes the 10 dep_* scenarios
    python3 -m tests.test_dependencies     # invariants + oracle under dependencies
    python3 -m tests.test_progress_dp
    ```

@@ -19,13 +19,13 @@ scenarios/
 sim/                  MuJoCo visual simulation (see below)
 reference/
   gpsr_task_manager.py   the real ROS node, UNMODIFIED — on-robot wiring reference
-run_scenarios.py      smoke test: runs all 57 scenarios
+run_scenarios.py      smoke test: runs all 59 scenarios
 ```
 
 ## Running
 
 ```bash
-python3 run_scenarios.py       # 57/57 expected
+python3 run_scenarios.py       # 59/59 expected
 python3 run_scenarios.py -v    # also print the merged ordering per scenario
 ```
 
@@ -161,13 +161,13 @@ between two collinear locations and checks that the order changes.
 
 ### Scope of the simulation
 
-Only `showcase_merge`, `showcase_all_leaves` and `showcase_exits` are fully provisioned. The 57 scenarios in
+Only `showcase_merge`, `showcase_all_leaves` and `showcase_exits` are fully provisioned. The 59 scenarios in
 `scenarios/merger.json` are unit tests *for the scheduler*: they reference locations
 like `A`/`loc7` and people like `Jane` that the apartment does not contain, so their
 perception leaves correctly report `TARGET_NOT_FOUND` and the tree drops to the
 fallback branch. 13 of the 27 original ones have every `go_to` resolvable, but rendering
 the rest meaningfully would mean populating the apartment to match each one.
-`run_scenarios.py` remains the check that matters for the merger itself, and passes 57/57.
+`run_scenarios.py` remains the check that matters for the merger itself, and passes 59/59.
 
 ## Still to write
 

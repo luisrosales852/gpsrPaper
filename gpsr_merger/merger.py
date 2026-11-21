@@ -361,6 +361,7 @@ def _optimal_schedule(
     has_origin: bool,
     needs: Optional[Sequence[Sequence[Sequence[Tuple[int, int]]]]] = None,
     origin_name: Optional[str] = None,
+    holding_penalty: float = 0.0,
 ) -> List[int]:
     """DP over per-command progress vectors.
 
@@ -368,6 +369,7 @@ def _optimal_schedule(
     ran the latest segment (-1 at the start). ``seg_ids[c][j]`` is the flat
     index of command c's j-th segment. States are expanded in layers of equal
     sum(k). O(n^2 * prod(L_c + 1)). Until the robot moves, steps cost ``seed``.
+    A hop driven while holding an object costs ``1 + holding_penalty`` times its length.
     """
     M = len(segments)
     if M == 0:
@@ -408,6 +410,8 @@ def _optimal_schedule(
                     step = seed[u] + _TIEBREAK_EPSILON * c
                 else:
                     step = row[u] + (_TIEBREAK_EPSILON if c != last else 0.0)
+                if holder is not None:
+                    step += holding_penalty * row[u]
                 nxt = (k[:c] + (k[c] + 1,) + k[c + 1:], c)
                 cand = cur_cost + step
                 if cand < f.get(nxt, INF):
@@ -454,6 +458,7 @@ def merge(
     dependencies: bool = True,
     room_of: Optional[RoomFn] = None,
     origin_name: Optional[str] = None,
+    holding_penalty: float = 0.0,
 ) -> InterleavedPlan:
     """Merge N parsed commands into one interleaved plan.
 
@@ -473,6 +478,8 @@ def merge(
     before actions that precede a command's first ``go_to``, and it prices
     the origin when ``origin`` is None. It is ignored if ``distance`` cannot
     reach it.
+    ``holding_penalty`` (the paper's lambda) makes every metre driven while
+    holding an object cost ``1 + holding_penalty``; 0 minimises plain travel.
     """
     if distance is None:
         loc_fn: Locator = locator if locator is not None else (lambda _: None)
@@ -525,6 +532,7 @@ def merge(
             has_origin,
             needs,
             origin_name,
+            holding_penalty,
         )
 
     actions = _flatten(schedule, flat_segments, commands, origin_name)

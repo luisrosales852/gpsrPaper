@@ -30,7 +30,7 @@ Corollaries:
 ## Commands
 
 ```bash
-python3 run_scenarios.py          # merger smoke test — expect 57/57
+python3 run_scenarios.py          # merger smoke test — expect 59/59
 python3 run_scenarios.py -v       # also print the merged ordering per scenario
 
 # Simulation (needs the venv; Python 3.14)
@@ -45,6 +45,7 @@ python3.14 -m venv .venv
 python3 -m tests.test_progress_dp                         # DP vs Held-Karp + named-start brute force, no venv
 python3 -m tests.test_dependencies                        # conflict order + oracle under deps, no venv
 python3 bench_runtime.py [--latex]                         # paper's planner-runtime table, no venv
+python3 bench_holding.py [--latex]                         # travel vs distance carried per lambda, no venv
 .venv/bin/python -m tests.test_sim_run                    # same checks without pytest
 ```
 
@@ -54,7 +55,7 @@ python3 bench_runtime.py [--latex]                         # paper's planner-run
   every iteration loop should use.
 - Always run from the repo root (`-m sim.run_sim`, not `python sim/run_sim.py`);
   the entry scripts do `sys.path.insert` of the repo root themselves.
-- Useful flags: `--fail pick_object:1` or `--fail 0.1:2` (`cmd.idx:count`) to
+- Useful flags: `--holding-penalty 1` (λ, default 0); `--fail pick_object:1` or `--fail 0.1:2` (`cmd.idx:count`) to
   inject failures and exercise Retry → Selector → `sequential_fallback`;
   `--print-tree`; `--scenario <name>`; `--camera iso`.
 - Defaults are tuned for the 1080p race video: `--width 832 --height 720` matches
@@ -70,7 +71,7 @@ gpsr_merger/           THE CONTRIBUTION — no third-party deps except py_trees 
   leaf_behaviours.py   ActionLeaf, SequentialFallbackLeaf, OneShotCallbackLeaf
   timeouts.py          per-action budgets + GLOBAL_BUDGET_S (300 s)
   status.py            vendored 11-line Status enum
-scenarios/merger.json  57 declarative scheduler scenarios (commands + coords + expect)
+scenarios/merger.json  59 declarative scheduler scenarios (commands + coords + expect)
 tests/_merger_helpers.py  invariant checkers, BAML stand-in builder, expect-evaluator
 tests/test_sim_run.py     17 tests on real headless sim runs (incl. collision checks)
 tests/test_progress_dp.py differential test: progress-vector DP vs tests/_heldkarp_oracle.py
@@ -140,6 +141,14 @@ Things that will bite you:
   like `distance=`) makes a room overlap the spots inside it; without it only equal
   names conflict. `dependencies=False` = travel-only, for ablations. Sim passes
   `World.room_of` (zones). `scenarios/merger.json` `dep_*` pin the cases.
+- **`holding_penalty` (λ, default 0).** A hop driven while some command holds
+  an object costs `1 + λ` times its length (`step += holding_penalty * row[u]`
+  when the DP state has a holder). Still exact: the holder is a function of k
+  (`test_holding_penalty_is_exact`, brute force). `planned_travel(...,
+  holding_penalty=)` re-derives it. `holding_penalty_*` scenarios pin a flip;
+  `bench_holding.py` gives the trade-off (λ=1: carried ≤ sequential, travel
+  +2.5% over λ=0). Only hops count; in-segment escorts while holding (the
+  paper's ρ) and κ, τ are not modelled.
 - **`distance=` is the only metric hook.** `merge(..., distance=fn)` replaces
   `_euclidean`. It takes location **names**, `fn(from_name | None, to_name)`, where
   `None` is the robot origin (only asked when `origin` is not None) — the same
@@ -264,7 +273,7 @@ people (a kind missing there is assumed to touch no shared state).
 
 ## Scope limits worth remembering
 
-- Only `showcase_merge`, `showcase_all_leaves` and `showcase_exits` are fully provisioned in the apartment. The 57
+- Only `showcase_merge`, `showcase_all_leaves` and `showcase_exits` are fully provisioned in the apartment. The 59
   scenarios in `scenarios/merger.json` are unit tests *for the scheduler*; they
   reference locations like `A`/`loc7` and people like `Jane` that do not exist in
   the apartment, so their perception leaves correctly report `TARGET_NOT_FOUND`.

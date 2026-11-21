@@ -224,6 +224,30 @@ def test_named_start_is_priced_as_driven():
         assert driven(plan.actions) <= best + 1e-6, (driven(plan.actions), best, cmds_json)
 
 
+def test_holding_penalty_is_exact():
+    """With holding_penalty > 0, the merged plan is the best feasible order
+    under travel + penalty x distance driven while holding."""
+    rng = random.Random(SEED + 4)
+    changed = 0
+    for _ in range(300):
+        cmds_json = _named_start_batch(rng)
+        coords = {name: [rng.uniform(0, 12), rng.uniform(0, 8)] for name in LOCS}
+        coords["S"] = [rng.uniform(0, 12), rng.uniform(0, 8)]
+        pose = (coords["S"][0] + rng.uniform(-1.5, 1.5), coords["S"][1] + rng.uniform(-1.5, 1.5))
+        distance = _asymmetric(coords, pose)
+        penalty = rng.choice([0.25, 0.5, 1.0, 2.0])
+        commands = build_commands(cmds_json)
+        flat, seg_ids, holding_after = _prepare(commands)
+        cost = lambda acts: planned_travel(acts, commands, distance, True, "S", penalty)  # noqa: E731
+        best = min(cost(_flatten(s, flat, commands, "S"))
+                   for s in _feasible_schedules(flat, seg_ids, holding_after))
+        kw = dict(origin=pose, distance=distance, dependencies=False, origin_name="S")
+        plan = merge(commands, holding_penalty=penalty, **kw)
+        assert cost(plan.actions) <= best + 1e-6, (cost(plan.actions), best, penalty, cmds_json)
+        changed += cost(merge(commands, **kw).actions) > best + 1e-6
+    assert changed > 0  # the penalty does change some plans
+
+
 def test_gpsr_batch_is_fast():
     rng = random.Random(1)
     cmds = [
