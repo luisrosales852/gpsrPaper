@@ -247,24 +247,25 @@ def test_origin_name_only_adds_the_drive_back():
         locator = make_locator({**COORDS, "origin": list(origin)})
         distance = _euclidean_distance(locator, origin)
         kw = dict(locator=locator, origin=origin, room_of=room_of)
-        travel = lambda p: planned_travel(p.actions, commands, distance, True)  # noqa: E731
+        travel = lambda p, name=None: planned_travel(p.actions, commands, distance, True, name)  # noqa: E731
 
         plain = merge(commands, dependencies=False, **kw)
         named = merge(commands, dependencies=False, origin_name="origin", **kw)
         assert work(plain) == work(named), cmds_json
-        assert abs(travel(plain) - travel(named)) < 1e-6, cmds_json
+        assert abs(travel(plain) - travel(named, "origin")) < 1e-6, cmds_json
         inserted += _check_inserted_go_tos(named, cmds_json)
 
         plain = merge(commands, **kw)
         named = merge(commands, origin_name="origin", **kw)
-        assert travel(named) <= travel(plain) + 1e-6, cmds_json
+        t_plain, t_named = travel(plain), travel(named, "origin")
+        assert t_named <= t_plain + 1e-6, cmds_json
         assert conflict_order_preserved(named.actions, commands, room_of, "origin"), cmds_json
         assert per_command_order_preserved(named.actions, len(commands))
         assert non_goto_actions_preserved(named, commands)
         inserted += _check_inserted_go_tos(named, cmds_json)
-        if travel(named) < travel(plain) - 1e-6:
+        if t_named < t_plain - 1e-6:
             improved += 1
-            saved += travel(plain) - travel(named)
+            saved += t_plain - t_named
 
         # origin=None + a resolvable name plans exactly like the known origin.
         unknown = merge(commands, locator=locator, origin=None, room_of=room_of, origin_name="origin")

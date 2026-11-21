@@ -134,10 +134,11 @@ _ESCORT_DEST = {"follow_person_until": "destination", "guide_person_to": "destin
 
 
 def planned_travel(plan_actions: Sequence[PlanAction], commands: Sequence[Any], distance,
-                   has_origin: bool) -> float:
+                   has_origin: bool, origin_name=None) -> float:
     """The merger's travel objective, re-derived per action: go_to hops priced
     from where the robot last ended (escort destinations included), and actions
-    before a command's first go_to priced at the origin. Unknown hops count 0."""
+    before a command's first go_to priced at the origin (driven by the inserted
+    go_to when ``origin_name`` is given). Unknown hops count 0."""
     origin = object()
     pos = origin
     total = 0.0
@@ -154,7 +155,7 @@ def planned_travel(plan_actions: Sequence[PlanAction], commands: Sequence[Any], 
 
     for pa in plan_actions:
         kind = getattr(pa.action, "action", "")
-        if pa.source_idx == -1:  # inserted go_to(origin_name)
+        if pa.source_idx == -1 and origin_name is None:
             total += hop(pos, origin)
             pos = origin
             continue
@@ -165,7 +166,7 @@ def planned_travel(plan_actions: Sequence[PlanAction], commands: Sequence[Any], 
                 pos = tgt
             continue
         before = list(getattr(commands[pa.source_cmd], "commands", []))[: pa.source_idx]
-        if all(getattr(x, "action", "") != "go_to" for x in before):
+        if origin_name is None and all(getattr(x, "action", "") != "go_to" for x in before):
             total += hop(pos, origin)
             pos = origin
         dest = getattr(pa.action, _ESCORT_DEST.get(kind, ""), None) if kind in _ESCORT_DEST else None

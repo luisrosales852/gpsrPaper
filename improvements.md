@@ -16,13 +16,26 @@ not scheduled first, the plan now contains a `go_to(origin_name)` right before
 it, so `pick cup → go_to A → place → pick book` becomes
 `… → place → go_to start → pick book` (`here_named_start_drives_back_when_forced_late`).
 
-- **The schedule never changes when `origin` is known.** The name is used only
-  after the DP: insertion, and `_collapse_redundant_go_tos(start=origin_name)`,
-  which drops it when the robot is already there (first segment, or right after
-  a command's own `go_to(start)`). Pricing still goes through
-  `distance(None, ·)`. Checked on 300 random batches
-  (`test_origin_name_only_adds_the_drive_back`): same work order, same planned
-  travel, every inserted `go_to` lands where the robot is not.
+- **Insertion follows the schedule.** `_flatten` adds the `go_to` after the DP,
+  and `_collapse_redundant_go_tos(start=origin_name)` drops it when the robot is
+  already there (first segment, or right after a command's own `go_to(start)`).
+  Travel-only, when the robot's pose is on the named start, the work order and
+  the travel equal those without a name; every inserted `go_to` lands where the
+  robot is not (`test_origin_name_only_adds_the_drive_back`, 300 batches).
+- **Priced as driven.** The DP prices what the plan drives: returning is
+  `distance(place, origin_name)` (the drive's own direction), leaving after a
+  return is `distance(origin_name, ·)`, and leaving before the robot has moved
+  is `distance(None, ·)`, from its own pose, since the inserted `go_to` is
+  dropped then. "Not moved yet" = every finished segment is an at-start one
+  without an escort, a function of the progress vector, so the DP stays exact
+  (it then prices the next step with `seed`, like the first one). Checked against brute force over every feasible order,
+  each scored by the travel its flattened plan drives, with the pose up to
+  1.5 m off the named start and a 15% asymmetric metric
+  (`test_named_start_is_priced_as_driven`): the old pricing (always
+  `distance(None, ·)`) was suboptimal in 28/300 batches (0.77 m mean, 3.25 m
+  max), the new one in 0/300. Nothing changes in the sim, where the pose is on
+  `start_location`; on the robot the TF pose never is, and Nav2 path lengths
+  are not symmetric.
 - **`origin=None` + a name** makes the origin known: `distance(origin_name, ·)`
   replaces `distance(None, ·)`, so the plan equals the known-origin plan instead
   of pushing a return to `LARGE_M` (`here_named_start_prices_unknown_origin`).

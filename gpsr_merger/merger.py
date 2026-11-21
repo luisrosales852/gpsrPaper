@@ -282,6 +282,7 @@ def _cost_matrix(
     segments: Sequence[_Segment],
     distance: DistanceFn,
     has_origin: bool,
+    origin_name: Optional[str] = None,
 ) -> Tuple[List[float], List[List[float]]]:
     """Seed costs and segment-to-segment costs, querying ``distance`` once per
     distinct location pair. Unresolved or unreachable locations cost LARGE_M."""
@@ -303,9 +304,10 @@ def _cost_matrix(
         return memo[(a, b)]
 
     M = len(segments)
-    entry = [_ORIGIN if seg.at_origin else seg.location for seg in segments]
+    start = _ORIGIN if origin_name is None else origin_name
+    entry = [start if seg.at_origin else seg.location for seg in segments]
     leave = [entry[u] if seg.exit is None else seg.exit for u, seg in enumerate(segments)]
-    seed = [cost(_ORIGIN, entry[u]) if has_origin or seg.at_origin else 0.0
+    seed = [cost(_ORIGIN, entry[u]) if has_origin and not seg.at_origin else 0.0
             for u, seg in enumerate(segments)]
     edge = [[cost(leave[a], entry[b]) for b in range(M)] for a in range(M)]
     return seed, edge
@@ -358,19 +360,22 @@ def _optimal_schedule(
     distance: DistanceFn,
     has_origin: bool,
     needs: Optional[Sequence[Sequence[Sequence[Tuple[int, int]]]]] = None,
+    origin_name: Optional[str] = None,
 ) -> List[int]:
     """DP over per-command progress vectors.
 
     State (k, last): k[c] = segments of command c done, last = command that
     ran the latest segment (-1 at the start). ``seg_ids[c][j]`` is the flat
     index of command c's j-th segment. States are expanded in layers of equal
-    sum(k). O(n^2 * prod(L_c + 1)).
+    sum(k). O(n^2 * prod(L_c + 1)). Until the robot moves, steps cost ``seed``.
     """
     M = len(segments)
     if M == 0:
         return []
 
-    seed, edge = _cost_matrix(segments, distance, has_origin)
+    seed, edge = _cost_matrix(segments, distance, has_origin, origin_name)
+    still = ({u for u, seg in enumerate(segments) if seg.at_origin and seg.exit is None}
+             if origin_name is not None else set())
     seg_lens = [len(ids) for ids in seg_ids]
     n = len(seg_lens)
 
@@ -387,6 +392,10 @@ def _optimal_schedule(
             cur_cost = f[state]
             holder = _gripper_holder(k, holding_after)
             here = seg_ids[last][k[last] - 1] if last >= 0 else -1
+            row = edge[here] if here >= 0 else seed
+            if here in still and all(k[d] == 0 or (k[d] == 1 and seg_ids[d][0] in still)
+                                     for d in range(n)):
+                row = seed
             for c in range(n):
                 if k[c] == seg_lens[c]:
                     continue
@@ -398,7 +407,7 @@ def _optimal_schedule(
                 if here < 0:
                     step = seed[u] + _TIEBREAK_EPSILON * c
                 else:
-                    step = edge[here][u] + (_TIEBREAK_EPSILON if c != last else 0.0)
+                    step = row[u] + (_TIEBREAK_EPSILON if c != last else 0.0)
                 nxt = (k[:c] + (k[c] + 1,) + k[c + 1:], c)
                 cand = cur_cost + step
                 if cand < f.get(nxt, INF):
@@ -512,21 +521,31 @@ def merge(
             distance,
             has_origin,
             needs,
+            origin_name,
         )
 
+    actions = _flatten(schedule, flat_segments, commands, origin_name)
+    fallback = [_collapse_redundant_go_tos(per) for per in _build_fallback(commands, origin_name)]
+
+    return InterleavedPlan(actions=actions, fallback=fallback)
+
+
+def _flatten(
+    schedule: Sequence[int],
+    segments: Sequence[_Segment],
+    commands: Sequence[Any],
+    origin_name: Optional[str],
+) -> List[PlanAction]:
+    """Segments -> PlanActions, inserting go_to(origin_name) and collapsing go_tos."""
     actions: List[PlanAction] = []
     for si in schedule:
-        seg = flat_segments[si]
+        seg = segments[si]
         if seg.at_origin and origin_name is not None:
             actions.append(_go_to_origin(origin_name, seg.cmd))
         for ai in seg.indices:
             action = commands[seg.cmd].commands[ai]
             actions.append(_to_plan_action(action, seg.cmd, ai))
-
-    actions = _collapse_redundant_go_tos(actions, start=origin_name)
-    fallback = [_collapse_redundant_go_tos(per) for per in _build_fallback(commands, origin_name)]
-
-    return InterleavedPlan(actions=actions, fallback=fallback)
+    return _collapse_redundant_go_tos(actions, start=origin_name)
 
 
 def _to_plan_action(action: Any, cmd_idx: int, action_idx: int) -> PlanAction:

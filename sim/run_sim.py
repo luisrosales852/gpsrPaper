@@ -78,10 +78,10 @@ def merger_distance(world: World, router: VisGraphRouter,
 
 
 def planned_cost(actions: Sequence[Any], commands: Sequence[Any], distance,
-                 origin: Optional[Tuple[float, float]]) -> float:
+                 origin: Optional[Tuple[float, float]], origin_name: Optional[str] = None) -> float:
     """The merger's own objective for this ordering (see ``planned_travel``);
     ``distance`` is the same function handed to ``merge()``."""
-    return planned_travel(actions, commands, distance, origin is not None)
+    return planned_travel(actions, commands, distance, origin is not None, origin_name)
 
 
 def start_name(world: World, origin: Optional[Tuple[float, float]]) -> Optional[str]:
@@ -114,8 +114,9 @@ def run_once(sc: dict, mode: str, out_dir: str, args) -> dict:
 
     router = planning_router(world)
     distance = merger_distance(world, router, origin)
+    origin_name = start_name(world, origin)
     plan = merge(commands, origin=origin, distance=distance, room_of=world.room_of,
-                 origin_name=start_name(world, origin))
+                 origin_name=origin_name)
     if mode == "sequential":
         exec_plan = sequential_plan(plan)
     else:
@@ -185,7 +186,7 @@ def run_once(sc: dict, mode: str, out_dir: str, args) -> dict:
     extra = {
         "tree_status": str(root.status),
         "planned_cost_m": round(planned_cost(exec_plan.actions, commands, distance,
-                                             origin), 3),
+                                             origin, origin_name), 3),
         "n_plan_actions": len(exec_plan.actions),
         "command_switches": sum(
             1 for a, b in zip(exec_plan.actions, exec_plan.actions[1:])
@@ -235,15 +236,16 @@ def main() -> int:
         origin = tuple(sc["origin"]) if sc.get("origin") is not None else None
         router = planning_router(world)
         distance = merger_distance(world, router, origin)
+        origin_name = start_name(world, origin)
         plan = merge(commands, origin=origin, distance=distance, room_of=world.room_of,
-                 origin_name=start_name(world, origin))
+                     origin_name=origin_name)
         seq = sequential_plan(plan)
         print(f"scenario: {sc['name']}  ({len(commands)} commands, origin={origin})\n")
         print("MERGED     :", describe_plan(plan))
-        print(f"  planned cost {planned_cost(plan.actions, commands, distance, origin):.2f} m, "
+        print(f"  planned cost {planned_cost(plan.actions, commands, distance, origin, origin_name):.2f} m, "
               f"{len(plan.actions)} actions")
         print("\nSEQUENTIAL :", describe_plan(seq))
-        print(f"  planned cost {planned_cost(seq.actions, commands, distance, origin):.2f} m, "
+        print(f"  planned cost {planned_cost(seq.actions, commands, distance, origin, origin_name):.2f} m, "
               f"{len(seq.actions)} actions")
         return 0
 

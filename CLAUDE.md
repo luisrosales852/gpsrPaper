@@ -42,7 +42,7 @@ python3.14 -m venv .venv
 .venv/bin/python -m sim.run_sim --mode both               # -> out/side_by_side.{mp4,png}, ~1 min
 .venv/bin/python -m sim.run_sim --scenario showcase_all_leaves   # 13-leaf coverage run
 .venv/bin/pytest tests/test_sim_run.py -q                 # 15 tests, headless, <1 s
-python3 -m tests.test_progress_dp                         # DP vs Held-Karp oracle, no venv
+python3 -m tests.test_progress_dp                         # DP vs Held-Karp + named-start brute force, no venv
 python3 -m tests.test_dependencies                        # conflict order + oracle under deps, no venv
 python3 bench_runtime.py [--latex]                         # paper's planner-runtime table, no venv
 .venv/bin/python -m tests.test_sim_run                    # same checks without pytest
@@ -119,9 +119,12 @@ Things that will bite you:
   (`LARGE_M` to return when `origin=None`). Without `origin_name` that is
   pricing only. With `merge(origin_name=...)` a `go_to(origin_name)` is inserted
   before such a segment (`PlanAction.source_idx == -1`, plain `SimpleNamespace`
-  action), dropped by the collapse when the robot is already there; it never
-  changes the schedule when `origin` is known, and makes the origin known when
-  `origin=None`. Each headless command's fallback starts with it too, and
+  action) by `_flatten`, dropped by the collapse when the robot is already
+  there; the DP prices it as driven (return `distance(place, origin_name)`,
+  then from `origin_name`; from `None`, i.e. `seed`, while the robot has not
+  moved), and it makes the origin known when `origin=None`.
+  `planned_travel(..., origin_name)` re-derives that drive;
+  `test_named_start_is_priced_as_driven` checks it against brute force. Each headless command's fallback starts with it too, and
   those actions' dependency effects are keyed at `origin_name` instead of `None`
   (`_annotate_effects(start=)`; the checker takes the same `start`). Sim passes
   `run_sim.start_name` (`start_location`). `here_*` scenarios,

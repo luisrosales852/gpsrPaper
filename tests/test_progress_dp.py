@@ -16,10 +16,14 @@ from gpsr_merger.merger import (  # noqa: E402
     _cost_matrix,
     _decompose,
     _euclidean_distance,
+    _flatten,
+    _gripper_holder,
     _optimal_schedule,
+    merge,
 )
 from tests._heldkarp_oracle import heldkarp_schedule  # noqa: E402
-from tests._merger_helpers import build_commands, make_distance, make_locator  # noqa: E402
+from tests._merger_helpers import (  # noqa: E402
+    build_commands, make_distance, make_locator, planned_travel)
 
 SCENARIOS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scenarios", "merger.json")
 ORACLE_MAX_M = 12  # Held-Karp is O(2^M * M^2); keep the oracle fast
@@ -74,9 +78,6 @@ def _compare(commands, distance, has_origin):
     return new == old
 
 
-# ---------------------------------------------------------------------------
-# Random batches
-# ---------------------------------------------------------------------------
 LOCS = [f"L{i}" for i in range(8)]
 
 
@@ -142,6 +143,85 @@ def test_scenarios_match_heldkarp():
         _compare(commands, distance, origin is not None)
         checked += 1
     assert checked > 20
+
+
+_HEADS = [[], [{"action": "answer_question"}], [{"action": "pick_object", "object_to_pick": "o"}],
+          [{"action": "find_person"}, {"action": "follow_person_until", "destination": "L1"}]]
+
+
+def _named_start_batch(rng):
+    """2-3 commands, mostly starting before their first go_to, M <= 7."""
+    while True:
+        commands = []
+        for _ in range(rng.randint(2, 3)):
+            head = list(rng.choice(_HEADS))
+            holding = bool(head) and head[0]["action"] == "pick_object"
+            acts = head
+            for j in range(rng.randint(1, 2)):
+                acts.append({"action": "go_to", "location_to_go": rng.choice(LOCS)})
+                if holding and (j == 1 or rng.random() < 0.5):
+                    acts.append({"action": "place_object"})
+                    holding = False
+                elif not holding and rng.random() < 0.3:
+                    acts.append({"action": "pick_object", "object_to_pick": "o"})
+                    holding = True
+                if rng.random() < 0.3:
+                    acts.append({"action": "guide_person_to", "destination_room": rng.choice(LOCS)})
+            if holding:
+                acts.append({"action": "place_object"})
+            commands.append(acts)
+        flat, _, _ = _prepare(build_commands(commands))
+        if len(flat) <= 7 and any(c[0]["action"] != "go_to" for c in commands):
+            return commands
+
+
+def _asymmetric(coords, pose):
+    """Euclidean + 15% one way: catches a return priced in the wrong direction."""
+    def d(a, b):
+        pa = pose if a is None else coords[a]
+        pb = coords[b]
+        e = ((pa[0] - pb[0]) ** 2 + (pa[1] - pb[1]) ** 2) ** 0.5
+        return e * (1.15 if (a or "") < b else 1.0)
+    return d
+
+
+def _feasible_schedules(flat, seg_ids, holding_after):
+    n = len(seg_ids)
+
+    def rec(k, out):
+        if all(k[c] == len(seg_ids[c]) for c in range(n)):
+            yield out
+            return
+        holder = _gripper_holder(k, holding_after)
+        for c in range(n):
+            if k[c] == len(seg_ids[c]):
+                continue
+            u = seg_ids[c][k[c]]
+            if holder is not None and holder != c and flat[u].ends_holding is not None:
+                continue
+            yield from rec(k[:c] + (k[c] + 1,) + k[c + 1:], out + [u])
+
+    yield from rec(tuple([0] * n), [])
+
+
+def test_named_start_is_priced_as_driven():
+    """With origin_name, the robot's pose off the named start and an asymmetric
+    metric, the merged plan drives no more than the best feasible order, where
+    each order is scored by the distance its flattened plan really drives."""
+    rng = random.Random(SEED + 3)
+    for _ in range(300):
+        cmds_json = _named_start_batch(rng)
+        coords = {name: [rng.uniform(0, 12), rng.uniform(0, 8)] for name in LOCS}
+        coords["S"] = [rng.uniform(0, 12), rng.uniform(0, 8)]
+        pose = (coords["S"][0] + rng.uniform(-1.5, 1.5), coords["S"][1] + rng.uniform(-1.5, 1.5))
+        distance = _asymmetric(coords, pose)
+        commands = build_commands(cmds_json)
+        flat, seg_ids, holding_after = _prepare(commands)
+        driven = lambda acts: planned_travel(acts, commands, distance, True, "S")  # noqa: E731
+        best = min(driven(_flatten(s, flat, commands, "S"))
+                   for s in _feasible_schedules(flat, seg_ids, holding_after))
+        plan = merge(commands, origin=pose, distance=distance, dependencies=False, origin_name="S")
+        assert driven(plan.actions) <= best + 1e-6, (driven(plan.actions), best, cmds_json)
 
 
 def test_gpsr_batch_is_fast():
