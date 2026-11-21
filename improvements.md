@@ -32,9 +32,16 @@ it, so `pick cup → go_to A → place → pick book` becomes
 - **Marker.** Inserted actions have `source_idx == -1` and a
   `SimpleNamespace(action="go_to", location_to_go=origin_name)` action. At most
   one per command, so `(source_cmd, source_idx)` stays unique.
-- Headless actions still have place `None` for dependencies (overlaps every
-  place). Keying them at `origin_name` would be more precise but would change
-  schedules; left for later.
+- **Dependencies act at the start.** With `origin_name`, actions before a
+  command's first `go_to` read/write state at that name instead of at the unknown
+  place `None`, which overlaps every place and made them conflict with almost
+  everything. This only removes constraints, so travel never grows. On 300
+  random batches it shortens 34 plans by 7.88 m on average, and the inserted
+  drive-backs drop from 39 to 5: most "forced late" headless segments were
+  spurious conflicts (`dep_here_unknown_place_conflicts_with_everything` vs
+  `dep_here_named_start_drops_spurious_conflict`). A real conflict at the start
+  still holds (`here_named_start_no_double_go_to`). Without `origin_name`
+  nothing changes.
 
 Sim showcases are unchanged (their headless segment already runs first).
 
@@ -262,7 +269,7 @@ plans change once this is ported**, but only for batches with a real conflict.
 
 1. Before deploying, in gpsrPaper:
    ```bash
-   python3 run_scenarios.py               # 52/52, includes the 10 dep_* scenarios
+   python3 run_scenarios.py               # 54/54, includes the 10 dep_* scenarios
    python3 -m tests.test_dependencies     # invariants + oracle under dependencies
    python3 -m tests.test_progress_dp
    ```

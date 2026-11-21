@@ -181,7 +181,8 @@ def test_every_scenario_with_dependencies_keeps_conflict_order():
             continue
         commands = build_commands(sc["commands"])
         plan = merge(commands, **kwargs)
-        assert conflict_order_preserved(plan.actions, commands, kwargs.get("room_of")), sc["name"]
+        assert conflict_order_preserved(plan.actions, commands, kwargs.get("room_of"),
+                                        kwargs.get("origin_name")), sc["name"]
 
 
 def test_conflict_free_showcases_keep_their_plan():
@@ -210,45 +211,67 @@ def _positions(actions):
     return out
 
 
+def _check_inserted_go_tos(plan, cmds_json):
+    """Inserted go_to(origin) only where the robot is elsewhere, right before the
+    command's first action; each headless command's fallback starts with one."""
+    A = plan.actions
+    n = 0
+    for i, (pa, pos) in enumerate(zip(A, _positions(A))):
+        if pa.source_idx != -1:
+            continue
+        n += 1
+        assert pos not in ("@start", "origin"), (cmds_json, i)  # never a go_to to where it is
+        nxt = A[i + 1]
+        assert nxt.source_cmd == pa.source_cmd and nxt.source_idx == 0, (cmds_json, i)
+    for c, fb in enumerate(plan.fallback):
+        headless = cmds_json[c][0]["action"] != "go_to"
+        assert (fb[0].source_idx == -1) == headless, (cmds_json, c)
+    return n
+
+
 def test_origin_name_only_adds_the_drive_back():
-    """With the start pose known, naming it never changes the schedule or its cost;
-    it only inserts a go_to back to it when the robot is elsewhere."""
+    """Travel-only, naming the known start never changes the schedule or its cost;
+    it only inserts a go_to back to it. With dependencies, acting at the start
+    instead of at an unknown place only removes constraints, so travel never grows."""
     rng = random.Random(SEED + 2)
     room_of = make_room_of(ROOMS)
-    inserted = 0
+    inserted = improved = 0
+    saved = 0.0
+    work = lambda p: [(x.source_cmd, x.source_idx) for x in p.actions  # noqa: E731
+                      if x.action.action != "go_to"]
+    key = lambda p: [(x.source_cmd, x.source_idx) for x in p.actions]  # noqa: E731
     for _ in range(N_RANDOM):
         cmds_json = _random_batch(rng)
         commands = build_commands(cmds_json)
         origin = (rng.uniform(0, 9), rng.uniform(-3, 3))
         locator = make_locator({**COORDS, "origin": list(origin)})
         distance = _euclidean_distance(locator, origin)
-        plain = merge(commands, locator=locator, origin=origin, room_of=room_of)
-        named = merge(commands, locator=locator, origin=origin, room_of=room_of, origin_name="origin")
+        kw = dict(locator=locator, origin=origin, room_of=room_of)
+        travel = lambda p: planned_travel(p.actions, commands, distance, True)  # noqa: E731
 
-        work = lambda p: [(x.source_cmd, x.source_idx) for x in p.actions  # noqa: E731
-                          if x.action.action != "go_to"]
+        plain = merge(commands, dependencies=False, **kw)
+        named = merge(commands, dependencies=False, origin_name="origin", **kw)
         assert work(plain) == work(named), cmds_json
-        assert abs(planned_travel(plain.actions, commands, distance, True)
-                   - planned_travel(named.actions, commands, distance, True)) < 1e-6, cmds_json
+        assert abs(travel(plain) - travel(named)) < 1e-6, cmds_json
+        inserted += _check_inserted_go_tos(named, cmds_json)
 
-        A = named.actions
-        for i, (pa, pos) in enumerate(zip(A, _positions(A))):
-            if pa.source_idx != -1:
-                continue
-            inserted += 1
-            assert pos not in ("@start", "origin"), (cmds_json, i)  # never a go_to to where it is
-            nxt = A[i + 1]
-            assert nxt.source_cmd == pa.source_cmd and nxt.source_idx == 0, (cmds_json, i)
-        for c, fb in enumerate(named.fallback):
-            headless = cmds_json[c][0]["action"] != "go_to"
-            assert (fb[0].source_idx == -1) == headless, (cmds_json, c)
+        plain = merge(commands, **kw)
+        named = merge(commands, origin_name="origin", **kw)
+        assert travel(named) <= travel(plain) + 1e-6, cmds_json
+        assert conflict_order_preserved(named.actions, commands, room_of, "origin"), cmds_json
+        assert per_command_order_preserved(named.actions, len(commands))
+        assert non_goto_actions_preserved(named, commands)
+        inserted += _check_inserted_go_tos(named, cmds_json)
+        if travel(named) < travel(plain) - 1e-6:
+            improved += 1
+            saved += travel(plain) - travel(named)
 
         # origin=None + a resolvable name plans exactly like the known origin.
         unknown = merge(commands, locator=locator, origin=None, room_of=room_of, origin_name="origin")
-        key = lambda p: [(x.source_cmd, x.source_idx) for x in p.actions]  # noqa: E731
         assert key(unknown) == key(named), cmds_json
-    print(f"origin_name: {inserted} inserted go_tos over {N_RANDOM} batches")
-    assert inserted > 0
+    print(f"origin_name: {inserted} inserted go_tos; acting at the start shortens "
+          f"{improved}/{N_RANDOM} plans, by {saved / max(improved, 1):.2f} m on average")
+    assert inserted > 0 and improved > 0
 
 
 def test_needs_only_point_at_earlier_commands():

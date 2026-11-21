@@ -203,9 +203,10 @@ def _action_effects(action: Any, here: Optional[str]) -> Tuple[set, set, Optiona
     return reads, writes, here_after
 
 
-def _annotate_effects(segments: Sequence[_Segment], command: Any) -> None:
+def _annotate_effects(segments: Sequence[_Segment], command: Any, start: Optional[str] = None) -> None:
+    """Read/write sets per segment; actions before the first go_to act at ``start``."""
     actions = list(getattr(command, "commands", []))
-    here: Optional[str] = None
+    here: Optional[str] = _norm_location(start)
     for seg in segments:
         reads: set = set()
         writes: set = set()
@@ -480,7 +481,7 @@ def merge(
     segments_per_cmd: List[List[_Segment]] = []
     for cmd_idx, command in enumerate(commands):
         per_cmd = _decompose(cmd_idx, command)
-        _annotate_effects(per_cmd, command)
+        _annotate_effects(per_cmd, command, start=origin_name)
         segments_per_cmd.append(per_cmd)
         flat_segments.extend(per_cmd)
 

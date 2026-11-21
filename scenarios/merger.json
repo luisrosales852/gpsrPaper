@@ -3822,7 +3822,7 @@
   },
   {
     "name": "here_named_start_no_double_go_to",
-    "description": "c0 ends with its own go_to(S); c1's headless pick is forced after it by the gripper and needs no inserted go_to.",
+    "description": "c0 ends by placing at S, where c1 picks before its first go_to: a real conflict at the start keeps c1 after c0, and c1 needs no inserted go_to because c0 already drove to S.",
     "commands": [
       [
         {
@@ -3838,7 +3838,7 @@
           "location_to_go": "S"
         },
         {
-          "action": "give_object"
+          "action": "place_object"
         }
       ],
       [
@@ -3892,7 +3892,8 @@
         0,
         1,
         2
-      ]
+      ],
+      "conflict_order_preserved": true
     }
   },
   {
@@ -3969,6 +3970,151 @@
         0,
         1,
         1
+      ]
+    }
+  },
+  {
+    "name": "dep_here_unknown_place_conflicts_with_everything",
+    "commands": [
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "couch"
+        },
+        {
+          "action": "find_person"
+        },
+        {
+          "action": "follow_person_until",
+          "destination": "kitchen"
+        }
+      ],
+      [
+        {
+          "action": "find_person",
+          "attribute_value": "waving"
+        },
+        {
+          "action": "get_person_info",
+          "info_type": "name"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "kitchen"
+        },
+        {
+          "action": "say_with_context",
+          "user_instruction": "name"
+        }
+      ]
+    ],
+    "coords": {
+      "couch": [
+        8,
+        0
+      ],
+      "kitchen": [
+        9,
+        0
+      ],
+      "S": [
+        0,
+        0
+      ]
+    },
+    "origin": [
+      0,
+      0
+    ],
+    "description": "Without origin_name, c1's find_person before its first go_to has place None, which overlaps c0's escort, so c1 waits for c0.",
+    "expect": {
+      "per_command_order": true,
+      "non_goto_preserved": true,
+      "gripper_invariant": true,
+      "conflict_order_preserved": true,
+      "source_cmd_order": [
+        0,
+        0,
+        0,
+        1,
+        1,
+        1,
+        1
+      ]
+    }
+  },
+  {
+    "name": "dep_here_named_start_drops_spurious_conflict",
+    "commands": [
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "couch"
+        },
+        {
+          "action": "find_person"
+        },
+        {
+          "action": "follow_person_until",
+          "destination": "kitchen"
+        }
+      ],
+      [
+        {
+          "action": "find_person",
+          "attribute_value": "waving"
+        },
+        {
+          "action": "get_person_info",
+          "info_type": "name"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "kitchen"
+        },
+        {
+          "action": "say_with_context",
+          "user_instruction": "name"
+        }
+      ]
+    ],
+    "coords": {
+      "couch": [
+        8,
+        0
+      ],
+      "kitchen": [
+        9,
+        0
+      ],
+      "S": [
+        0,
+        0
+      ]
+    },
+    "origin": [
+      0,
+      0
+    ],
+    "origin_name": "S",
+    "description": "With origin_name, c1's find_person acts at S, which c0's escort (couch -> kitchen) does not touch: c1 runs first, at the start.",
+    "expect": {
+      "per_command_order": true,
+      "non_goto_preserved": true,
+      "gripper_invariant": true,
+      "conflict_order_preserved": true,
+      "source_cmd_order": [
+        1,
+        1,
+        0,
+        0,
+        0,
+        1,
+        1
+      ],
+      "go_to_order": [
+        "couch",
+        "kitchen"
       ]
     }
   }

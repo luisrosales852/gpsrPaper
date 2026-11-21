@@ -90,11 +90,12 @@ def gripper_walk_strict(plan_actions: Iterable[PlanAction]) -> bool:
     return True
 
 
-def action_effects_by_source(commands: Sequence[Any]) -> dict:
-    """``{(cmd, idx): (reads, writes)}`` for every action."""
+def action_effects_by_source(commands: Sequence[Any], start=None) -> dict:
+    """``{(cmd, idx): (reads, writes)}`` for every action; ``start`` is the
+    place of actions before a command's first go_to (None = unknown)."""
     out = {}
     for c, command in enumerate(commands):
-        here = None
+        here = _norm_location(start)
         for i, action in enumerate(getattr(command, "commands", [])):
             reads, writes, here = _action_effects(action, here)
             out[(c, i)] = (reads, writes)
@@ -102,10 +103,10 @@ def action_effects_by_source(commands: Sequence[Any]) -> dict:
 
 
 def conflict_order_preserved(plan_actions: Sequence[PlanAction], commands: Sequence[Any],
-                             room_of=None) -> bool:
+                             room_of=None, start=None) -> bool:
     """Conflicting actions of different commands run in issue order
     (checked per action, independently of the merger's segment table)."""
-    effects = action_effects_by_source(commands)
+    effects = action_effects_by_source(commands, start)
 
     def room(place):
         return _norm_location(room_of(place)) if (room_of and place) else None
@@ -279,7 +280,7 @@ def describe_plan(plan: InterleavedPlan) -> str:
 
 
 def evaluate_expectations(
-    plan: InterleavedPlan, commands: Sequence[Any], expect: dict, room_of=None
+    plan: InterleavedPlan, commands: Sequence[Any], expect: dict, room_of=None, start=None
 ) -> Tuple[bool, List[str]]:
     """Run the declarative checks in ``expect`` against a merged ``plan``.
 
@@ -411,7 +412,7 @@ def evaluate_expectations(
         if (ca, ia) not in pos or (cb, ib) not in pos or pos[(ca, ia)] > pos[(cb, ib)]:
             fail(f"action_before ({ca},{ia}) < ({cb},{ib})")
     if "conflict_order_preserved" in expect:
-        got = conflict_order_preserved(A, commands, room_of)
+        got = conflict_order_preserved(A, commands, room_of, start)
         if got != expect["conflict_order_preserved"]:
             fail(f"conflict_order_preserved: got {got}")
 
