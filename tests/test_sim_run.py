@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from gpsr_merger.timeouts import GLOBAL_BUDGET_S  # noqa: E402
 from sim.routing import (  # noqa: E402
     PERSON_RADIUS, ROBOT_RADIUS, VisGraphRouter, furniture_rects)
+from sim.robot import FOLLOW_GAP  # noqa: E402
 from sim.run_sim import load_scenario, run_once  # noqa: E402
 from sim.world import World  # noqa: E402
 
@@ -36,7 +37,8 @@ APARTMENT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file_
                          "sim", "apartment.json")
 # Every run the collision tests sweep: both showcases, both orderings, plus one
 # with an injected failure so the fallback branch's movements are covered too.
-COLLISION_RUNS = [(sc, mode, None) for sc in ("showcase_all_leaves", "showcase_merge")
+COLLISION_RUNS = [(sc, mode, None)
+                  for sc in ("showcase_all_leaves", "showcase_merge", "showcase_exits")
                   for mode in ("merged", "sequential")] + [
                   ("showcase_all_leaves", "merged", ("pick_object:1", "0.3:3"))]
 # Slack for trail sampling (TRAIL_DT at cruise speed is ~4 cm, and the planner
@@ -147,16 +149,66 @@ def test_cost_model_gap_is_attributable_to_non_goto_displacement():
     the robot without being a ``go_to`` — follow/guide, and the pick stand-off."""
     summary, log, _ = run("merged")
     ev = log["events"]
-    non_goto = 0.0
-    for s, e in zip(ev[0::2], ev[1::2]):
-        assert s["phase"] == "start" and e["phase"] == "end" and s["idx"] == e["idx"]
-        if e["kind"] != "go_to":
-            non_goto += e["distance_m"] - s["distance_m"]
+    non_goto = _non_goto_displacement(log)
     assert summary["cost_model_gap_m"] > 0.5, "expected a measurable gap in this scenario"
     assert non_goto > 0.5
     kinds = {e["kind"] for s, e in zip(ev[0::2], ev[1::2])
              if e["distance_m"] - s["distance_m"] > 0.01 and e["kind"] != "go_to"}
     assert kinds <= {"follow_person_until", "guide_person_to", "pick_object"}, kinds
+
+
+def _non_goto_displacement(log):
+    ev = log["events"]
+    total = 0.0
+    for s, e in zip(ev[0::2], ev[1::2]):
+        assert s["phase"] == "start" and e["phase"] == "end" and s["idx"] == e["idx"]
+        if e["kind"] != "go_to":
+            total += e["distance_m"] - s["distance_m"]
+    return total
+
+
+def test_exit_locations_are_priced():
+    """The planner prices the hop after a guide/follow from the escort's
+    destination, so planned cost + in-segment displacement is what the robot
+    drives, and the merged order beats sequential in showcase_exits."""
+    for sc in ("showcase_exits", "showcase_all_leaves"):
+        for mode in ("merged", "sequential"):
+            s, log, _ = run(mode, sc)
+            assert s["actions_succeeded"] == s["actions_executed"]
+            residue = s["cost_model_gap_m"] - _non_goto_displacement(log)
+            # A follow stops FOLLOW_GAP short of its destination.
+            assert abs(residue) < FOLLOW_GAP, (sc, mode, residue)
+    m, _, _ = run("merged", "showcase_exits")
+    q, _, _ = run("sequential", "showcase_exits")
+    assert m["planned_cost_m"] < q["planned_cost_m"]
+    assert m["actual_distance_m"] < q["actual_distance_m"]
+    assert m["task_time_s"] < q["task_time_s"]
+
+
+def test_command_without_go_to_runs_at_the_origin():
+    """showcase_exits' c0 has no go_to: it runs first, before the robot moves."""
+    _, log, _ = run("merged", "showcase_exits")
+    first = _ends(log)[0]
+    assert (first["cmd"], first["kind"]) == (0, "answer_question")
+    assert first["distance_m"] == 0.0
+
+
+def test_answers_only_use_their_own_command_results():
+    """Each say_with_context reports exactly its own command's results (register_c),
+    whatever the other commands did in between."""
+    checked = 0
+    for sc, mode, fail in COLLISION_RUNS:
+        _, log, _ = run(mode, sc, fail)
+        own = {}
+        for e in _ends(log):
+            if e["kind"] == "say_with_context":
+                text = str(e["result"])
+                ctx = text.split(": ", 1)[1].split("; ") if ": " in text else []
+                assert ctx == own.get(e["cmd"], []), (sc, mode, fail, e["cmd"], text)
+                checked += 1
+            elif e["kind"] != "go_to" and e["status"].endswith("SUCCESS") and e["result"]:
+                own.setdefault(e["cmd"], []).append(str(e["result"]))
+    assert checked > 0
 
 
 def test_planned_cost_is_the_driven_metric():

@@ -86,15 +86,16 @@ def _random_batch(rng):
     while True:
         n = rng.randint(2, 4)
         lens = [rng.randint(1, 4) for _ in range(n)]
-        if sum(lens) <= ORACLE_MAX_M:
+        heads = [rng.random() < 0.2 for _ in range(n)]  # actions before the first go_to
+        if sum(lens) + sum(heads) <= ORACLE_MAX_M:
             break
     commands = []
-    for L in lens:
+    for L, head in zip(lens, heads):
         pick_at = place_at = None
         if rng.random() < 0.6:
             pick_at = rng.randrange(L)
             place_at = rng.randrange(pick_at, L)
-        acts = []
+        acts = [{"action": "answer_question"}] if head else []
         for j in range(L):
             acts.append({"action": "go_to", "location_to_go": rng.choice(names)})
             if j == pick_at:
@@ -103,6 +104,12 @@ def _random_batch(rng):
                 acts.append({"action": "place_object"})
             if rng.random() < 0.5:
                 acts.append({"action": "count", "target_to_count": "x"})
+            if rng.random() < 0.25:  # escort: the segment exits somewhere else
+                dest = rng.choice(names + [None])
+                if rng.random() < 0.5:
+                    acts.append({"action": "guide_person_to", "destination_room": dest})
+                else:
+                    acts.append({"action": "follow_person_until", "destination": dest})
         commands.append(acts)
     origin = None if rng.random() < 0.3 else (rng.uniform(0, 12), rng.uniform(0, 8))
     return commands, coords, origin

@@ -168,10 +168,19 @@ starts with a \code{go\_to} and contains every action up to the next
 \code{go\_to}. Command $c$ then has segments $s_{c,1},\dots,s_{c,L_c}$. Each
 segment has an entry location $e(s)$, the target of its \code{go\_to}, and an
 exit location $x(s)$, which equals $e(s)$ unless the segment contains a
-\code{guide\_person\_to} or \code{follow\_person\_until}, in which case it is
-that action's destination. A segment with no leading \code{go\_to} is attached
-to the preceding segment of the same command, or to the robot's position when
-the command was given.
+\code{guide\_person\_to} or \code{follow\_person\_until} with a destination, in
+which case it is that destination. A \code{follow\_person\_until} without a
+destination ends wherever the person stops, which is unknown when planning. We
+keep $x(s)=e(s)$ for it, so the next hop is priced from where the follow
+started. Pricing it as unreachable instead would push every such follow to the
+end of the plan. Actions before a command's first \code{go\_to}
+(``tell me a joke, then go to the kitchen and \ldots'') are performed where the
+command was given. They form a segment whose entry and exit are the robot's
+start $p_0$, which is a named location on the map (the instruction point).
+When the schedule does not place this segment first, a \code{go\_to} back to
+$p_0$ is inserted before it. When the robot is already at $p_0$, the inserted
+\code{go\_to} is dropped. The insertion follows the schedule and does not
+change it: the cost of returning to $p_0$ is already part of $T(\pi)$.
 
 \begin{table}[t]
 \centering
@@ -331,12 +340,12 @@ $0<k_{c'}<L_{c'}$, and subtract the bonus $B$ from the terminal cost when
 $b=1$. This doubles the number of states. \todo{Check with the technical
 committee what counts as ``meaningful'' interleaving.}
 
-\emph{Time limit.} The test ends after $T_{\max}=420$\,s. Maximizing the
+\emph{Time limit.} The test ends after $T_{\max}=300$\,s. Maximizing the
 probability of finishing, or the expected score when unfinished commands earn
 nothing, depends on the total elapsed time rather than a sum of costs. We add
 the elapsed time $t$, discretized at resolution $\Delta$, to the state. With
-$\Delta=1$\,s this multiplies the state count by at most $T_{\max}/\Delta=420$,
-which gives about $3.2\times10^5$ states for a GPSR batch with the bonus bit.
+$\Delta=1$\,s this multiplies the state count by at most $T_{\max}/\Delta=300$,
+which gives about $2.3\times10^5$ states for a GPSR batch with the bonus bit.
 \todo{Measure solve time; consider a coarser $\Delta$.}
 
 \begin{algorithm}[t]
@@ -592,27 +601,37 @@ $\lambda=0$ (time only)         & \X & \X & \X \\
 \end{table}
 
 \subsection{Planner runtime}
-Table~\ref{tab:runtime} compares the progress-vector DP with a subset DP
-(Held-Karp over segments) on random batches of increasing size. Sizes beyond a
-GPSR batch are included to show scaling.
-\todo{Re-run on final implementation; current values are from a prototype.}
+Table~\ref{tab:runtime} compares the state space of the progress-vector DP
+with that of a subset DP (Held-Karp over segments) on random batches of
+increasing size, and reports the DP's solve time. The first row is the largest
+GPSR batch ($n=3$, $L_c=4$), which solves in under a millisecond. Larger sizes
+are included to show scaling. Times are for pure Python on a single core,
+without dependency constraints, which only remove transitions. The planner
+bounds the state space at $n\prod_c(L_c+1)\le2\times10^5$. Above the bound it
+returns the commands in issue order, which is always feasible, so planning
+time stays bounded. This happens only far beyond a GPSR batch, whose bound is
+375.
 
 \begin{table}[t]
 \centering
-\caption{Planner runtime on random batches.}
+\caption{Planner runtime on random batches (\code{bench\_runtime.py}).}
 \label{tab:runtime}
 \resizebox{\columnwidth}{!}{%
 \begin{tabular}{rrrrr}
 \toprule
-$M$ & $n$ & Progress states & Subset states ($2^M$) & Time (s) \\
+$M$ & $n$ & $\prod_c(L_c+1)$ & Subset states ($2^M$) & DP time (ms) \\
 \midrule
-12 & 4 & 256 & 4\,096 & 0.002 \\
-18 & 4 & 900 & 262\,144 & 0.007 \\
-22 & 5 & 4\,500 & $4.2\times10^{6}$ & 0.022 \\
-26 & 6 & 22\,500 & $6.7\times10^{7}$ & 0.30 \\
-32 & 8 & 390\,625 & $4.3\times10^{9}$ & 5.9 \\
+12 & 3 & 125 & 4\,096 & 0.3 \\
+12 & 4 & 256 & 4\,096 & 0.6 \\
+18 & 4 & 900 & 262\,144 & 2.8 \\
+22 & 5 & 4\,500 & $4.2\times10^{6}$ & 11.7 \\
+26 & 6 & 22\,500 & $6.7\times10^{7}$ & 127 \\
+32 & 8 & 390\,625 & $4.3\times10^{9}$ & 1\,537$^\dagger$ \\
 \bottomrule
 \end{tabular}}
+\\[2pt]
+{\footnotesize $^\dagger$Above the state bound; the planner returns issue order
+instead of running the DP. Timed by calling the DP directly.}
 \end{table}
 
 \subsection{Where errors come from}

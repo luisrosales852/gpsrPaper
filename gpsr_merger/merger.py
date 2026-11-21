@@ -14,6 +14,9 @@ order that:
     DP over per-command progress vectors at the *segment* granularity,
     allowing gripper-neutral segments of any command to interleave inside
     another command's atomic block,
+  * prices each hop from where the previous segment *ends* (an escort's
+    destination) and runs actions before a command's first ``go_to`` at the
+    robot's start position (driving back there when ``origin_name`` is given),
   * dedups back-to-back same-location ``go_to`` actions in the final plan.
 
 Pipeline:
@@ -32,11 +35,19 @@ The merger is intentionally framework-free: it talks to BAML objects via
 """
 
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any, Callable, Dict, FrozenSet, List, Optional, Sequence, Tuple
 
 # Action-kind classifications.
 _GRIPPER_ACQUIRES = frozenset({"pick_object"})
 _GRIPPER_RELEASES = frozenset({"give_object", "place_object"})
+# Escorts end at their destination: kind -> field holding it.
+_ESCORT_DESTINATION = {
+    "follow_person_until": "destination",
+    "guide_person_to": "destination_room",
+}
+# Stands for the robot's start position in the cost matrix.
+_ORIGIN = object()
 # Sentinel cost for any edge touching an unresolved (None) coordinate. Well
 # above any realistic indoor navigation distance, so the DP avoids unknown
 # locations unless the per-command prefix forces them into a slot.
@@ -87,6 +98,10 @@ class _Segment:
     # (True = held, False = empty); None if it has no gripper action,
     # i.e. the segment is gripper-neutral.
     ends_holding: Optional[bool] = None
+    # Where the robot stands after the segment if an escort moved it.
+    exit: Optional[str] = None
+    # True for actions before the command's first go_to: they run at the origin.
+    at_origin: bool = False
     reads: FrozenSet[_Var] = frozenset()
     writes: FrozenSet[_Var] = frozenset()
 
@@ -102,9 +117,11 @@ def _decompose(cmd_idx: int, command: Any) -> List[_Segment]:
     cur_loc: Optional[str] = None
     cur_indices: List[int] = []
     cur_end: Optional[bool] = None
+    cur_exit: Optional[str] = None
+    seen_go_to = False
 
     def flush() -> None:
-        nonlocal cur_indices, cur_end, cur_loc
+        nonlocal cur_indices, cur_end, cur_exit
         if cur_indices:
             segments.append(
                 _Segment(
@@ -112,15 +129,19 @@ def _decompose(cmd_idx: int, command: Any) -> List[_Segment]:
                     indices=list(cur_indices),
                     location=cur_loc,
                     ends_holding=cur_end,
+                    exit=cur_exit,
+                    at_origin=not seen_go_to,
                 )
             )
         cur_indices = []
         cur_end = None
+        cur_exit = None
 
     for i, action in enumerate(actions):
         kind = _kind(action)
         if kind == "go_to":
             flush()
+            seen_go_to = True
             cur_loc = getattr(action, "location_to_go", None)
             cur_indices.append(i)
         else:
@@ -129,6 +150,10 @@ def _decompose(cmd_idx: int, command: Any) -> List[_Segment]:
                 cur_end = True
             if kind in _GRIPPER_RELEASES:
                 cur_end = False
+            if kind in _ESCORT_DESTINATION:
+                dest = getattr(action, _ESCORT_DESTINATION[kind], None)
+                if isinstance(dest, str) and dest.strip():
+                    cur_exit = dest
     flush()
     return segments
 
@@ -153,10 +178,6 @@ _EFFECTS = {
     # Escorts also write the destination; see _action_effects.
     "follow_person_until": ({_PEOPLE}, {_PEOPLE}),
     "guide_person_to": ({_PEOPLE}, {_PEOPLE}),
-}
-_ESCORT_DESTINATION = {
-    "follow_person_until": "destination",
-    "guide_person_to": "destination_room",
 }
 
 
@@ -265,23 +286,27 @@ def _cost_matrix(
     distinct location pair. Unresolved or unreachable locations cost LARGE_M."""
     memo: dict = {}
 
-    def cost(a: Optional[str], b: Optional[str]) -> float:
-        if b is None:
+    def cost(a: Any, b: Any) -> float:
+        if a is None or b is None:
             return LARGE_M
         if a == b:
             return 0.0
+        if a is _ORIGIN or b is _ORIGIN:
+            if not has_origin:
+                # Unknown origin: leaving it is free, returning to it is not.
+                return 0.0 if a is _ORIGIN else LARGE_M
+            a, b = None, (b if a is _ORIGIN else a)
         if (a, b) not in memo:
             d = distance(a, b)
             memo[(a, b)] = LARGE_M if d is None or not d < LARGE_M else d
         return memo[(a, b)]
 
     M = len(segments)
-    locs = [seg.location for seg in segments]
-    seed = [cost(None, locs[u]) if has_origin else 0.0 for u in range(M)]
-    edge = [
-        [LARGE_M if locs[a] is None else cost(locs[a], locs[b]) for b in range(M)]
-        for a in range(M)
-    ]
+    entry = [_ORIGIN if seg.at_origin else seg.location for seg in segments]
+    leave = [entry[u] if seg.exit is None else seg.exit for u, seg in enumerate(segments)]
+    seed = [cost(_ORIGIN, entry[u]) if has_origin or seg.at_origin else 0.0
+            for u, seg in enumerate(segments)]
+    edge = [[cost(leave[a], entry[b]) for b in range(M)] for a in range(M)]
     return seed, edge
 
 
@@ -418,6 +443,7 @@ def merge(
     distance: Optional[DistanceFn] = None,
     dependencies: bool = True,
     room_of: Optional[RoomFn] = None,
+    origin_name: Optional[str] = None,
 ) -> InterleavedPlan:
     """Merge N parsed commands into one interleaved plan.
 
@@ -433,10 +459,19 @@ def merge(
     ``dependencies=False`` disables cross-command conflict ordering.
     ``room_of`` maps a location to its room, so a room overlaps the places
     inside it; without it only identical names conflict.
+    ``origin_name`` names the robot's start; a ``go_to`` to it is inserted
+    before actions that precede a command's first ``go_to``, and it prices
+    the origin when ``origin`` is None.
     """
     if distance is None:
         loc_fn: Locator = locator if locator is not None else (lambda _: None)
         distance = _euclidean_distance(loc_fn, origin)
+    if origin is None and origin_name is not None:
+        base = distance
+
+        def distance(a: Optional[str], b: str) -> Optional[float]:
+            return base(origin_name if a is None else a, b)
+    has_origin = origin is not None or origin_name is not None
 
     if not commands:
         return InterleavedPlan(actions=[], fallback=[])
@@ -450,7 +485,7 @@ def merge(
         flat_segments.extend(per_cmd)
 
     if not flat_segments:
-        return InterleavedPlan(actions=[], fallback=_build_fallback(commands))
+        return InterleavedPlan(actions=[], fallback=_build_fallback(commands, origin_name))
 
     # seg_ids[c][j] = flat index of command c's j-th segment.
     seg_ids: List[List[int]] = []
@@ -474,19 +509,21 @@ def merge(
             seg_ids,
             holding_after,
             distance,
-            origin is not None,
+            has_origin,
             needs,
         )
 
     actions: List[PlanAction] = []
     for si in schedule:
         seg = flat_segments[si]
+        if seg.at_origin and origin_name is not None:
+            actions.append(_go_to_origin(origin_name, seg.cmd))
         for ai in seg.indices:
             action = commands[seg.cmd].commands[ai]
             actions.append(_to_plan_action(action, seg.cmd, ai))
 
-    actions = _collapse_redundant_go_tos(actions)
-    fallback = [_collapse_redundant_go_tos(per) for per in _build_fallback(commands)]
+    actions = _collapse_redundant_go_tos(actions, start=origin_name)
+    fallback = [_collapse_redundant_go_tos(per) for per in _build_fallback(commands, origin_name)]
 
     return InterleavedPlan(actions=actions, fallback=fallback)
 
@@ -503,11 +540,19 @@ def _to_plan_action(action: Any, cmd_idx: int, action_idx: int) -> PlanAction:
     )
 
 
-def _build_fallback(commands: Sequence[Any]) -> List[List[PlanAction]]:
+def _go_to_origin(origin_name: str, cmd_idx: int) -> PlanAction:
+    """Inserted ``go_to`` back to the start; ``source_idx=-1`` marks it."""
+    return _to_plan_action(SimpleNamespace(action="go_to", location_to_go=origin_name), cmd_idx, -1)
+
+
+def _build_fallback(commands: Sequence[Any], origin_name: Optional[str] = None) -> List[List[PlanAction]]:
     out: List[List[PlanAction]] = []
     for cmd_idx, command in enumerate(commands):
         per_cmd: List[PlanAction] = []
-        for ai, action in enumerate(getattr(command, "commands", [])):
+        actions = list(getattr(command, "commands", []))
+        if origin_name is not None and actions and _kind(actions[0]) != "go_to":
+            per_cmd.append(_go_to_origin(origin_name, cmd_idx))
+        for ai, action in enumerate(actions):
             per_cmd.append(_to_plan_action(action, cmd_idx, ai))
         out.append(per_cmd)
     return out
@@ -515,11 +560,15 @@ def _build_fallback(commands: Sequence[Any]) -> List[List[PlanAction]]:
 
 def _collapse_redundant_go_tos(
     actions: Sequence[PlanAction],
+    start: Optional[str] = None,
 ) -> List[PlanAction]:
-    """Drop a leading ``go_to X`` whenever the previous action ended at X."""
-    last_loc: Optional[str] = None
+    """Drop a leading ``go_to X`` whenever the previous action ended at X
+    (``start`` is where the robot is before the first action)."""
+    last_loc: Optional[str] = start
     out: List[PlanAction] = []
     for pa in actions:
+        if _kind(pa.action) in _ESCORT_DESTINATION:
+            last_loc = None  # the escort moved the robot
         if _kind(pa.action) == "go_to":
             tgt = getattr(pa.action, "location_to_go", None)
             if tgt is not None and tgt == last_loc:

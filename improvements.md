@@ -6,6 +6,156 @@ Changes made in `gpsrPaper/gpsr_merger/merger.py` that are **not yet in
 
 ---
 
+## 5. Named start: drive back before headless actions — 2026-11-20
+
+### What changed and why
+
+Closes the limit in §4. `merge(..., origin_name="start_location")` names the
+robot's start. When a segment of actions before a command's first `go_to` is
+not scheduled first, the plan now contains a `go_to(origin_name)` right before
+it, so `pick cup → go_to A → place → pick book` becomes
+`… → place → go_to start → pick book` (`here_named_start_drives_back_when_forced_late`).
+
+- **The schedule never changes when `origin` is known.** The name is used only
+  after the DP: insertion, and `_collapse_redundant_go_tos(start=origin_name)`,
+  which drops it when the robot is already there (first segment, or right after
+  a command's own `go_to(start)`). Pricing still goes through
+  `distance(None, ·)`. Checked on 300 random batches
+  (`test_origin_name_only_adds_the_drive_back`): same work order, same planned
+  travel, every inserted `go_to` lands where the robot is not.
+- **`origin=None` + a name** makes the origin known: `distance(origin_name, ·)`
+  replaces `distance(None, ·)`, so the plan equals the known-origin plan instead
+  of pushing a return to `LARGE_M` (`here_named_start_prices_unknown_origin`).
+- **Fallback.** Each headless command's fallback starts with the inserted
+  `go_to`, since the fallback runs after a failure, away from the start.
+  `sim.run_sim.sequential_plan` drops it for the very first command only.
+- **Marker.** Inserted actions have `source_idx == -1` and a
+  `SimpleNamespace(action="go_to", location_to_go=origin_name)` action. At most
+  one per command, so `(source_cmd, source_idx)` stays unique.
+- Headless actions still have place `None` for dependencies (overlaps every
+  place). Keying them at `origin_name` would be more precise but would change
+  schedules; left for later.
+
+Sim showcases are unchanged (their headless segment already runs first).
+
+### How to port it to home2
+
+File copy, then pass `origin_name=<instruction-point name>` from
+`GPSRTM._execute_interleaved_batch`. Check: (1) `_path_cost` / `_resolve_xy`
+resolve that name; (2) the `go_to` handler accepts a `SimpleNamespace` with
+`action`/`location_to_go` (it reads them by attribute); (3) `_completed` keys
+`(cmd, -1)` are harmless.
+
+### Verifying on the robot
+
+Hardcode `here_named_start_drives_back_when_forced_late` with real places: the
+robot must drive back to the instruction point before the second pick.
+
+---
+
+## 4. Commands with no leading `go_to` run at the origin — 2026-11-16
+
+### What changed and why
+
+"Tell me a joke, then go to the kitchen and count the cups" parses to a command
+whose first action is not a `go_to`. That action happens where the robot stands
+when the batch is given. The merger used to give that segment `location=None`,
+i.e. an unknown place costing `LARGE_M` (1000 m) in and out, so its position in
+the plan was arbitrary.
+
+Now `_decompose` marks it `at_origin`, and `_cost_matrix` prices it:
+
+| hop | origin known | `origin=None` |
+|---|---|---|
+| start → it | 0 | 0 |
+| it → next place | `distance(None, place)` | 0 (same as the no-origin seed) |
+| a place → it | `distance(None, place)` | `LARGE_M` |
+
+A `go_to` whose name does not resolve is still unknown (`LARGE_M`).
+
+**Limit (fixed in §5 with `origin_name`).** This is pricing only. The plan has no action
+that drives the robot back to the origin, because the parser gave none and the
+origin has no name. The DP runs these segments first when it can. It cannot when
+the gripper or a dependency forces them later
+(`here_forced_late_by_gripper`), and it may choose not to when the segment ends
+with an escort (`here_escort_can_run_late_without_drive_back`). In both cases
+the action runs wherever the robot is, as it already does in sequential order.
+Fixing it needs a named start location the merger could insert a `go_to` for.
+
+### How to port it to home2
+
+File copy; `merge()`'s signature is unchanged. Nothing to wire.
+
+### Verifying on the robot
+
+Hardcode a batch whose second command starts with `answer_question` and whose
+first command starts with a far `go_to`. The answer must be given before the
+robot drives anywhere.
+
+---
+
+## 3. Exit locations for guide/follow — 2026-11-16
+
+### What changed and why
+
+"Go to the couch, guide Jane to the kitchen" leaves the robot in the kitchen.
+The merger priced the next hop from the couch. Now a segment containing
+`guide_person_to` (`destination_room`) or `follow_person_until` (`destination`)
+has an `exit`, and `_cost_matrix` uses `edge = distance(exit(previous),
+entry(next))`. The DP is untouched: the robot's position is still a function of
+the last segment, so it stays exact (checked against the Held-Karp oracle on
+400 random batches that now include escorts and headless commands).
+
+- A follow with **no destination** keeps `exit = entry`. Its end point is
+  unknown, and pricing it as `LARGE_M` would push every such follow to the end.
+- **Collapse bug fixed.** `_collapse_redundant_go_tos` only tracked `go_to`
+  targets, so `go_to A, guide to B, go_to A` dropped the second `go_to A` and
+  the robot did A's work in B. An escort now resets the tracked location, so the
+  next `go_to` is always kept (also right after an escort to that same place:
+  a follow stops behind the person, not on the spot). Pinned by
+  `exit_keeps_go_to_after_escort`; `shared_start_first_command_goto_protected`
+  had pinned the bug (count at `chairs` executed in the bathroom) and now
+  expects two visits.
+
+### Measured
+
+300 random GPSR-shaped batches (`tests/test_dependencies.py` generator), same
+gripper and dependency rules, travel measured with exits:
+
+| | old pricing | exits + origin |
+|---|---|---|
+| mean travel saved vs sequential | 7.44 m | 8.77 m |
+| batches where the merged plan is *worse* than sequential | 19 | 0 |
+
+The plan changes in 107 of the 223 batches that contain an escort or a
+headless command, saving 3.73 m on average (max 16.3 m) in those.
+
+Simulation (collision-free path length, `--no-video`):
+
+| scenario | merged before | merged now | sequential |
+|---|---|---|---|
+| `showcase_all_leaves` | 38.24 m / 136.3 s | 35.49 m / 132.6 s | 41.38 m / 142.7 s |
+| `showcase_merge` (no escort) | 35.38 m / 119.1 s | unchanged | 58.37 m / 161.6 s |
+| `showcase_exits` (new) | order priced the old way: 37.3 m planned | 37.52 m / 113.8 s (19.9 m planned) | 39.85 m / 117.1 s (21.6 m planned) |
+
+`cost_model_gap_m` is now the in-segment displacement (the escort itself and
+the pick stand-off) to within one `FOLLOW_GAP`
+(`test_exit_locations_are_priced`).
+
+### How to port it to home2
+
+File copy; `merge()`'s signature is unchanged. The destination names go through
+the same `locator` / `distance` as `go_to` targets, so `_resolve_xy` must
+resolve room names such as "kitchen" (it already does for `go_to`).
+
+### Verifying on the robot
+
+Hardcode `exit_guide_prices_next_hop_from_destination` with real locations: a
+guide from A to a far room B, one command near B and one near A. The plan must
+do the command near A first, then the guide, then the command near B.
+
+---
+
 ## 2. Cross-command dependencies — 2026-11-12
 
 ### What changed and why
@@ -64,9 +214,10 @@ stays exact. Constraints only point at earlier-issued commands, so sequential
 order always satisfies them, and the DP can never get stuck because of them.
 
 **Measured** on 300 random GPSR-shaped batches (`tests/test_dependencies.py`):
-185 contain a cross-command conflict, and **travel-only planning breaks conflict
-order in 111 of them**. Enforcing dependencies costs **1.24 m** extra travel on
-average. Both sim showcases have no shared places, so their plans are unchanged
+174 contain a cross-command conflict, and **travel-only planning breaks conflict
+order in 112 of them**. Enforcing dependencies costs **2.25 m** extra travel on
+average (numbers re-measured 2026-11-16 with exit locations and headless
+commands in the generator; before that: 185 / 111 / 1.24 m). Both sim showcases have no shared places, so their plans are unchanged
 (35.38 m vs 58.37 m).
 
 ### API
@@ -111,7 +262,7 @@ plans change once this is ported**, but only for batches with a real conflict.
 
 1. Before deploying, in gpsrPaper:
    ```bash
-   python3 run_scenarios.py               # 40/40, includes the 10 dep_* scenarios
+   python3 run_scenarios.py               # 52/52, includes the 10 dep_* scenarios
    python3 -m tests.test_dependencies     # invariants + oracle under dependencies
    python3 -m tests.test_progress_dp
    ```

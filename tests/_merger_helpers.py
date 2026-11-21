@@ -116,7 +116,8 @@ def conflict_order_preserved(plan_actions: Sequence[PlanAction], commands: Seque
     def clash(writes, others):
         return any(w[0] == o[0] and overlap(w[1], o[1]) for w in writes for o in others)
 
-    seq = [(pa.source_cmd, pa.source_idx) for pa in plan_actions]
+    # Inserted go_to(origin_name) (source_idx -1) touches no state.
+    seq = [(pa.source_cmd, pa.source_idx) for pa in plan_actions if pa.source_idx != -1]
     for i, (ci, ai) in enumerate(seq):
         ri, wi = effects[(ci, ai)]
         for cj, aj in seq[i + 1:]:
@@ -126,6 +127,50 @@ def conflict_order_preserved(plan_actions: Sequence[PlanAction], commands: Seque
             if clash(wi, rj | wj) or clash(wj, ri):
                 return False
     return True
+
+
+_ESCORT_DEST = {"follow_person_until": "destination", "guide_person_to": "destination_room"}
+
+
+def planned_travel(plan_actions: Sequence[PlanAction], commands: Sequence[Any], distance,
+                   has_origin: bool) -> float:
+    """The merger's travel objective, re-derived per action: go_to hops priced
+    from where the robot last ended (escort destinations included), and actions
+    before a command's first go_to priced at the origin. Unknown hops count 0."""
+    origin = object()
+    pos = origin
+    total = 0.0
+
+    def hop(a, b):
+        if a == b:
+            return 0.0
+        if a is origin or b is origin:
+            if not has_origin:
+                return 0.0
+            a, b = None, (b if a is origin else a)
+        d = distance(a, b)
+        return d if d is not None and d < float("inf") else 0.0
+
+    for pa in plan_actions:
+        kind = getattr(pa.action, "action", "")
+        if pa.source_idx == -1:  # inserted go_to(origin_name)
+            total += hop(pos, origin)
+            pos = origin
+            continue
+        if kind == "go_to":
+            tgt = getattr(pa.action, "location_to_go", None)
+            if tgt is not None:
+                total += hop(pos, tgt)
+                pos = tgt
+            continue
+        before = list(getattr(commands[pa.source_cmd], "commands", []))[: pa.source_idx]
+        if all(getattr(x, "action", "") != "go_to" for x in before):
+            total += hop(pos, origin)
+            pos = origin
+        dest = getattr(pa.action, _ESCORT_DEST.get(kind, ""), None) if kind in _ESCORT_DEST else None
+        if isinstance(dest, str) and dest.strip():
+            pos = dest
+    return total
 
 
 def build_commands(commands_json: Sequence[Sequence[dict]]) -> List[Any]:
@@ -197,6 +242,8 @@ def merge_kwargs(sc: dict) -> dict:
         kwargs["room_of"] = make_room_of(sc["rooms"])
     if "dependencies" in sc:
         kwargs["dependencies"] = bool(sc["dependencies"])
+    if "origin_name" in sc:
+        kwargs["origin_name"] = sc["origin_name"]
     return kwargs
 
 

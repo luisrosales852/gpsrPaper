@@ -66,7 +66,7 @@ class SimSubtaskHandler:
         self.failures = dict(failures or {})
         self.current = None              # PlanAction, set by on_action_start
         self.locked: Dict[int, SimPerson] = {}   # per source command
-        self.last_results: List[str] = []
+        self.results: Dict[int, List[str]] = {}  # register_c: one per source command
 
     # ---- wiring from bt_builder hooks ------------------------------------
 
@@ -110,8 +110,10 @@ class SimSubtaskHandler:
 
     def _end(self, status: Status, result=None) -> Tuple[Status, Any]:
         self.robot.deadline = None
-        if status == Status.EXECUTION_SUCCESS and result is not None:
-            self.last_results.append(str(result))
+        kind = getattr(getattr(self.current, "action", None), "action", "")
+        if (status == Status.EXECUTION_SUCCESS and result is not None
+                and kind not in ("go_to", "say_with_context")):
+            self.results.setdefault(self.cmd_idx, []).append(str(result))
         return (status, result)
 
     def _near(self, xy, radius: float) -> bool:
@@ -376,7 +378,7 @@ class SimSubtaskHandler:
     def say_with_context(self, command) -> Tuple[Status, Any]:
         def body():
             instruction = str(_f(command, "user_instruction", ""))
-            prior = _f(command, "previous_command_info", []) or self.last_results[-2:]
+            prior = _f(command, "previous_command_info", []) or self.results.get(self.cmd_idx, [])
             ctx = "; ".join(str(p) for p in prior if p)
             text = f"About {instruction}: {ctx}" if ctx else f"About {instruction}."
             self._say(text, anchor="robot", hold=DURATION["say_with_context"])

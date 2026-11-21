@@ -30,7 +30,7 @@ Corollaries:
 ## Commands
 
 ```bash
-python3 run_scenarios.py          # merger smoke test — expect 40/40
+python3 run_scenarios.py          # merger smoke test — expect 52/52
 python3 run_scenarios.py -v       # also print the merged ordering per scenario
 
 # Simulation (needs the venv; Python 3.14)
@@ -41,9 +41,10 @@ python3.14 -m venv .venv
 .venv/bin/python -m sim.run_sim --mode both --no-video    # event log only, ~0.1 s
 .venv/bin/python -m sim.run_sim --mode both               # -> out/side_by_side.{mp4,png}, ~1 min
 .venv/bin/python -m sim.run_sim --scenario showcase_all_leaves   # 13-leaf coverage run
-.venv/bin/pytest tests/test_sim_run.py -q                 # 12 tests, headless, <1 s
+.venv/bin/pytest tests/test_sim_run.py -q                 # 15 tests, headless, <1 s
 python3 -m tests.test_progress_dp                         # DP vs Held-Karp oracle, no venv
 python3 -m tests.test_dependencies                        # conflict order + oracle under deps, no venv
+python3 bench_runtime.py [--latex]                         # paper's planner-runtime table, no venv
 .venv/bin/python -m tests.test_sim_run                    # same checks without pytest
 ```
 
@@ -69,9 +70,9 @@ gpsr_merger/           THE CONTRIBUTION — no third-party deps except py_trees 
   leaf_behaviours.py   ActionLeaf, SequentialFallbackLeaf, OneShotCallbackLeaf
   timeouts.py          per-action budgets + GLOBAL_BUDGET_S (300 s)
   status.py            vendored 11-line Status enum
-scenarios/merger.json  40 declarative scheduler scenarios (commands + coords + expect)
+scenarios/merger.json  52 declarative scheduler scenarios (commands + coords + expect)
 tests/_merger_helpers.py  invariant checkers, BAML stand-in builder, expect-evaluator
-tests/test_sim_run.py     12 tests on real headless sim runs (incl. collision checks)
+tests/test_sim_run.py     15 tests on real headless sim runs (incl. collision checks)
 tests/test_progress_dp.py differential test: progress-vector DP vs tests/_heldkarp_oracle.py
 tests/test_dependencies.py cross-command dependencies on random GPSR-shaped batches
 sim/                   MuJoCo apartment; consumer of the contribution
@@ -108,6 +109,21 @@ Things that will bite you:
 - **`origin=None` is meaningful**, not a lazy default: it seeds the DP with no
   origin edge, avoiding a bias toward the SLAM map origin when the real pose is
   unknown. Scenarios cover both.
+- **Entry vs exit.** A segment enters at its `go_to` target and exits there too,
+  unless it contains a `guide_person_to` / `follow_person_until` with a
+  destination: then `_Segment.exit` is that destination and the next hop is
+  priced from it (`exit_*` scenarios). An escort also stops
+  `_collapse_redundant_go_tos` from dropping the next `go_to`.
+- **`at_origin` segments.** Actions before a command's first `go_to` run at the
+  robot's start: free when first, priced with `distance(None, place)` otherwise
+  (`LARGE_M` to return when `origin=None`). Without `origin_name` that is
+  pricing only. With `merge(origin_name=...)` a `go_to(origin_name)` is inserted
+  before such a segment (`PlanAction.source_idx == -1`, plain `SimpleNamespace`
+  action), dropped by the collapse when the robot is already there; it never
+  changes the schedule when `origin` is known, and makes the origin known when
+  `origin=None`. Each headless command's fallback starts with it too. Sim passes
+  `run_sim.start_name` (`start_location`). `here_*` scenarios,
+  `test_origin_name_only_adds_the_drive_back`, `improvements.md` §4–5.
 - Everything reaches command objects through `getattr`, so plain
   `SimpleNamespace` stand-ins work. That duck-typing is load-bearing.
 - **Cross-command dependencies (on by default).** Each action has read/write
@@ -162,7 +178,7 @@ Selector "gpsr_root" (memory)
 |---|---|
 | `apartment.json` | open-plan floor plan: bounds, zones, furniture, 19 locations, 8 objects, 3 people — data only. Every location must be in free space (tested) |
 | `routing/` | **all navigation lives here, never in `gpsr_merger/`** (Nav2 owns it on the robot). `base.Router` protocol (`set_people`, `free_point`, `plan_path`, `distance`); `obstacles.py` inflates furniture and people rects by `ROBOT_RADIUS` (0.364 m, from the mjcf footprint) + margin; `visgraph.VisGraphRouter` = visibility graph + Dijkstra, exact and deterministic. A grid/A* router can be added later behind the same protocol |
-| `scenarios_visual.json` | `showcase_merge` (**default, the demo**): 4 commands that each zig-zag north↔south, so ordering matters — merged is ~26% faster / ~39% less driving. `showcase_all_leaves`: 4 commands whose union hits all 13 leaf kinds (coverage; the 7 original tests use it, and it saves only ~4–8% so it is a poor demo) |
+| `scenarios_visual.json` | `showcase_exits`: a guide and a follow that end far from where they start, plus a command with no `go_to` (pins exit pricing; start the guide from `lobby`, not `entrance` — a guide whose route passes the person's standing spot clips them). `showcase_merge` (**default, the demo**): 4 commands that each zig-zag north↔south, so ordering matters — merged is ~26% faster / ~39% less driving. `showcase_all_leaves`: 4 commands whose union hits all 13 leaf kinds (coverage; the 7 original tests use it, and it saves only ~7–14% so it is a poor demo) |
 | `world.py` | loads the apartment; `World.locator` is the merger-facing contract (mirrors `GPSRTM._resolve_xy`, returns `None` for unknown) |
 | `mjcf.py` | apartment JSON → MuJoCo MJCF string |
 | `robot.py` | kinematic base, gripper, pedestrians; raises `SimTimeout` past `deadline`. `drive_path` drives router waypoints; `follow_person`/`lead_person` move robot and person along one shared track |
@@ -208,11 +224,13 @@ by name in the paper:
 
 `tests/test_sim_run.py` re-witnesses these at execution time, plus
 `test_merged_travels_less_than_sequential` and
-`test_cost_model_gap_is_attributable_to_non_goto_displacement` (the planner only
-models `go_to` hops, so the gap must come from follow/guide/pick stand-off).
+`test_cost_model_gap_is_attributable_to_non_goto_displacement` (the planner
+models hops between segments, so the gap must come from follow/guide/pick
+stand-off), `test_exit_locations_are_priced` (gap = in-segment displacement to
+within `FOLLOW_GAP`) and `test_command_without_go_to_runs_at_the_origin`.
 Navigation evidence, all read from the event log:
 `test_every_location_is_in_free_space`, `test_robot_never_overlaps_furniture_or_walls`,
-`test_robot_keeps_clear_of_people` (these sweep `COLLISION_RUNS`: both showcases,
+`test_robot_keeps_clear_of_people` (these sweep `COLLISION_RUNS`: the three showcases,
 both orderings, and one run with injected failures) and
 `test_planned_cost_is_the_driven_metric`.
 
@@ -233,7 +251,7 @@ people (a kind missing there is assumed to touch no shared state).
 
 ## Scope limits worth remembering
 
-- Only `showcase_merge` and `showcase_all_leaves` are fully provisioned in the apartment. The 27
+- Only `showcase_merge`, `showcase_all_leaves` and `showcase_exits` are fully provisioned in the apartment. The 52
   scenarios in `scenarios/merger.json` are unit tests *for the scheduler*; they
   reference locations like `A`/`loc7` and people like `Jane` that do not exist in
   the apartment, so their perception leaves correctly report `TARGET_NOT_FOUND`.

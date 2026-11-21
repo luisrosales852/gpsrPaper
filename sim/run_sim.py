@@ -35,7 +35,7 @@ from sim.recorder import Recorder  # noqa: E402
 from sim.robot import SimRobot  # noqa: E402
 from sim.routing import VisGraphRouter  # noqa: E402
 from sim.world import World  # noqa: E402
-from tests._merger_helpers import build_commands, describe_plan  # noqa: E402
+from tests._merger_helpers import build_commands, describe_plan, planned_travel  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -77,27 +77,21 @@ def merger_distance(world: World, router: VisGraphRouter,
     return distance
 
 
-def planned_cost(actions: Sequence[Any], world: World,
-                 origin: Optional[Tuple[float, float]], distance) -> float:
-    """The merger's own objective for this ordering.
+def planned_cost(actions: Sequence[Any], commands: Sequence[Any], distance,
+                 origin: Optional[Tuple[float, float]]) -> float:
+    """The merger's own objective for this ordering (see ``planned_travel``);
+    ``distance`` is the same function handed to ``merge()``."""
+    return planned_travel(actions, commands, distance, origin is not None)
 
-    Sums ``distance`` hops between consecutive resolvable ``go_to`` targets,
-    which is precisely what ``merger._optimal_schedule`` minimises. Comparing it
-    with the distance the robot actually drives is how the sim exposes
-    displacement that the cost model does not account for.
-    """
-    last = origin
-    total = 0.0
-    for pa in actions:
-        if getattr(pa.action, "action", "") != "go_to":
-            continue
-        xy = world.locator(getattr(pa.action, "location_to_go", "") or "")
-        if xy is None:
-            continue
-        if last is not None:
-            total += distance(last, xy)
-        last = xy
-    return total
+
+def start_name(world: World, origin: Optional[Tuple[float, float]]) -> Optional[str]:
+    """The apartment location the robot starts on, handed to ``merge(origin_name=...)``."""
+    if origin is None:
+        return None
+    for name, (x, y, _yaw) in world.locations.items():
+        if math.hypot(x - origin[0], y - origin[1]) < 1e-6:
+            return name
+    return None
 
 
 def sequential_plan(plan: InterleavedPlan) -> InterleavedPlan:
@@ -107,8 +101,10 @@ def sequential_plan(plan: InterleavedPlan) -> InterleavedPlan:
     baseline needs no new scheduling code: same executor, same handlers, same
     world — only the ordering differs, which is exactly the claim under test.
     """
-    return InterleavedPlan(actions=[pa for per_cmd in plan.fallback for pa in per_cmd],
-                           fallback=[])
+    actions = [pa for per_cmd in plan.fallback for pa in per_cmd]
+    if actions and actions[0].source_idx == -1:
+        actions = actions[1:]  # the robot already stands on the start
+    return InterleavedPlan(actions=actions, fallback=[])
 
 
 def run_once(sc: dict, mode: str, out_dir: str, args) -> dict:
@@ -117,8 +113,9 @@ def run_once(sc: dict, mode: str, out_dir: str, args) -> dict:
     commands = build_commands(sc["commands"])
 
     router = planning_router(world)
-    plan = merge(commands, origin=origin, distance=merger_distance(world, router, origin),
-                 room_of=world.room_of)
+    distance = merger_distance(world, router, origin)
+    plan = merge(commands, origin=origin, distance=distance, room_of=world.room_of,
+                 origin_name=start_name(world, origin))
     if mode == "sequential":
         exec_plan = sequential_plan(plan)
     else:
@@ -187,8 +184,8 @@ def run_once(sc: dict, mode: str, out_dir: str, args) -> dict:
 
     extra = {
         "tree_status": str(root.status),
-        "planned_cost_m": round(planned_cost(exec_plan.actions, world, origin,
-                                             router.distance), 3),
+        "planned_cost_m": round(planned_cost(exec_plan.actions, commands, distance,
+                                             origin), 3),
         "n_plan_actions": len(exec_plan.actions),
         "command_switches": sum(
             1 for a, b in zip(exec_plan.actions, exec_plan.actions[1:])
@@ -237,15 +234,16 @@ def main() -> int:
         commands = build_commands(sc["commands"])
         origin = tuple(sc["origin"]) if sc.get("origin") is not None else None
         router = planning_router(world)
-        plan = merge(commands, origin=origin, distance=merger_distance(world, router, origin),
-                 room_of=world.room_of)
+        distance = merger_distance(world, router, origin)
+        plan = merge(commands, origin=origin, distance=distance, room_of=world.room_of,
+                 origin_name=start_name(world, origin))
         seq = sequential_plan(plan)
         print(f"scenario: {sc['name']}  ({len(commands)} commands, origin={origin})\n")
         print("MERGED     :", describe_plan(plan))
-        print(f"  planned cost {planned_cost(plan.actions, world, origin, router.distance):.2f} m, "
+        print(f"  planned cost {planned_cost(plan.actions, commands, distance, origin):.2f} m, "
               f"{len(plan.actions)} actions")
         print("\nSEQUENTIAL :", describe_plan(seq))
-        print(f"  planned cost {planned_cost(seq.actions, world, origin, router.distance):.2f} m, "
+        print(f"  planned cost {planned_cost(seq.actions, commands, distance, origin):.2f} m, "
               f"{len(seq.actions)} actions")
         return 0
 
