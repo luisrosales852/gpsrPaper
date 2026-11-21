@@ -169,7 +169,7 @@ _PEOPLE = "people"
 _EFFECTS = {
     "pick_object": ({_OBJECTS}, {_OBJECTS}),
     "place_object": (set(), {_OBJECTS}),
-    "give_object": ({_PEOPLE}, set()),
+    "give_object": ({_PEOPLE}, {_OBJECTS}),
     "count": ({_OBJECTS, _PEOPLE}, set()),
     "get_visual_info": ({_OBJECTS}, set()),
     "find_person": ({_PEOPLE}, set()),

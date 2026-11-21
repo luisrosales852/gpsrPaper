@@ -4465,5 +4465,81 @@
         "living_room"
       ]
     }
+  },
+  {
+    "name": "dep_count_waits_for_earlier_give",
+    "_comment": "A (issued first): bring the cup from the shelf to the person in the kitchen. B: count the cups in the kitchen, then go to the garage. Sequentially B counts after the handover, so the cup in the person's hand is counted; B's count must follow A's give.",
+    "commands": [
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "shelf"
+        },
+        {
+          "action": "pick_object",
+          "object_to_pick": "cup"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "kitchen"
+        },
+        {
+          "action": "give_object"
+        }
+      ],
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "kitchen"
+        },
+        {
+          "action": "count",
+          "target_to_count": "cups"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "garage"
+        },
+        {
+          "action": "answer_question"
+        }
+      ]
+    ],
+    "coords": {
+      "shelf": [
+        9.7,
+        6.4
+      ],
+      "kitchen": [
+        0.7,
+        0.8
+      ],
+      "garage": [
+        7.5,
+        0.6
+      ]
+    },
+    "origin": [
+      0.1,
+      3.9
+    ],
+    "expect": {
+      "per_command_order": true,
+      "non_goto_preserved": true,
+      "gripper_invariant": true,
+      "conflict_order_preserved": true,
+      "action_before": [
+        [
+          [
+            0,
+            3
+          ],
+          [
+            1,
+            1
+          ]
+        ]
+      ]
+    }
   }
 ]

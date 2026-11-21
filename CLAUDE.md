@@ -30,7 +30,7 @@ Corollaries:
 ## Commands
 
 ```bash
-python3 run_scenarios.py          # merger smoke test — expect 59/59
+python3 run_scenarios.py          # merger smoke test — expect 60/60
 python3 run_scenarios.py -v       # also print the merged ordering per scenario
 
 # Simulation (needs the venv; Python 3.14)
@@ -71,7 +71,7 @@ gpsr_merger/           THE CONTRIBUTION — no third-party deps except py_trees 
   leaf_behaviours.py   ActionLeaf, SequentialFallbackLeaf, OneShotCallbackLeaf
   timeouts.py          per-action budgets + GLOBAL_BUDGET_S (300 s)
   status.py            vendored 11-line Status enum
-scenarios/merger.json  59 declarative scheduler scenarios (commands + coords + expect)
+scenarios/merger.json  60 declarative scheduler scenarios (commands + coords + expect)
 tests/_merger_helpers.py  invariant checkers, BAML stand-in builder, expect-evaluator
 tests/test_sim_run.py     17 tests on real headless sim runs (incl. collision checks)
 tests/test_progress_dp.py differential test: progress-vector DP vs tests/_heldkarp_oracle.py
@@ -273,7 +273,7 @@ people (a kind missing there is assumed to touch no shared state).
 
 ## Scope limits worth remembering
 
-- Only `showcase_merge`, `showcase_all_leaves` and `showcase_exits` are fully provisioned in the apartment. The 59
+- Only `showcase_merge`, `showcase_all_leaves` and `showcase_exits` are fully provisioned in the apartment. The 60
   scenarios in `scenarios/merger.json` are unit tests *for the scheduler*; they
   reference locations like `A`/`loc7` and people like `Jane` that do not exist in
   the apartment, so their perception leaves correctly report `TARGET_NOT_FOUND`.

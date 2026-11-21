@@ -297,7 +297,7 @@ real conflict (which would cost a wrong answer).
 |---|---|---|
 | `pick_object` | objects | objects |
 | `place_object` | — | objects |
-| `give_object` | people | — |
+| `give_object` | people | objects (the handed object is now at this place) |
 | `count` | objects, people | — |
 | `get_visual_info` | objects | — |
 | `find_person`, `find_person_by_name`, `get_person_info` | people | — |
@@ -371,7 +371,7 @@ plans change once this is ported**, but only for batches with a real conflict.
 
 1. Before deploying, in gpsrPaper:
    ```bash
-   python3 run_scenarios.py               # 59/59, includes the 10 dep_* scenarios
+   python3 run_scenarios.py               # 60/60, includes the 13 dep_* scenarios
    python3 -m tests.test_dependencies     # invariants + oracle under dependencies
    python3 -m tests.test_progress_dp
    ```

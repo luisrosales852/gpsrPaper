@@ -1,7 +1,7 @@
 # Possible improvements — what `main.tex` claims that the code doesn't do yet
 
 Audit of the paper draft against the code, 2026-11-11. Done items move to
-`improvements.md`, which is the list of changes to port to home2.
+`improvements.md`, which is the list of changes to port to home2. Open items are now tracked in `futureWork.md`.
 
 Status: ✅ done · 🚧 in progress · ⬜ not started
 
