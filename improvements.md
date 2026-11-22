@@ -11,31 +11,36 @@ Changes made in `gpsrPaper/gpsr_merger/` that are **not yet in
 ### What changed and why
 
 Interleaving runs other commands' gripper-free segments while one command holds
-an object, so merged plans carry objects further than sequential ones: 7.38 m vs
+an object, so merged plans carry objects further than sequential ones: 8.04 m vs
 6.22 m per batch on 1000 random GPSR-shaped batches (`bench_holding.py`).
 Carrying is where failures cost most (a failure while holding used to lose two
 commands, §6) and where the 300 s limit hurts (an undelivered object earns
 nothing).
 
 `merge(..., holding_penalty=λ)` makes every metre driven while holding cost
-`1 + λ`. The DP already knows the holder in each state (gripper rule), so it is
-one line and stays exact (`test_holding_penalty_is_exact`, brute force over
-every feasible order). λ = 0 is the old objective.
+`1 + λ`. That covers the hops between segments and the escort legs inside a
+segment (guiding or following someone while holding, the distance part of the
+paper's ρ). The DP already knows the holder in each state (gripper rule), and
+an escort leg is carried or not depending only on the segment and on whether it
+starts holding, so it stays exact (`test_holding_penalty_is_exact`, brute force
+over every feasible order). λ = 0 is the old objective.
 
 | | travel m | carried m |
 |---|---|---|
 | sequential | 29.08 | 6.22 |
-| λ = 0 | 18.30 | 7.38 |
-| λ = 0.5 | 18.48 | 6.52 |
-| λ = 1 | 18.76 | 6.14 |
-| λ = 2 | 18.94 | 6.01 |
+| λ = 0 | 18.40 | 8.04 |
+| λ = 0.5 | 18.63 | 6.92 |
+| λ = 1 | 18.94 | 6.49 |
+| λ = 2 | 19.13 | 6.36 |
 
-At λ = 1 the merged plan carries less than sequential and still drives 35% less.
+At λ = 1 the merged plan drives 35% less than sequential and carries 4% more
+(29% more at λ = 0). Sequential carries each object straight from pick to
+place, so it is close to the floor; λ = 10 reaches 6.23 m.
 Showcases are unchanged at the default λ = 0 (and `showcase_all_leaves` keeps its
 plan even at λ = 1: the side table is on the cup's way).
 
-Not modelled: displacement inside a segment while holding (an escort with an
-object, the paper's ρ), κ and τ.
+Not modelled: κ, τ, and the time part of ρ (dwelling at a segment while
+holding), which needs τ.
 
 ### How to port it to home2
 
@@ -371,7 +376,7 @@ plans change once this is ported**, but only for batches with a real conflict.
 
 1. Before deploying, in gpsrPaper:
    ```bash
-   python3 run_scenarios.py               # 60/60, includes the 13 dep_* scenarios
+   python3 run_scenarios.py               # 62/62, includes the 13 dep_* scenarios
    python3 -m tests.test_dependencies     # invariants + oracle under dependencies
    python3 -m tests.test_progress_dp
    ```

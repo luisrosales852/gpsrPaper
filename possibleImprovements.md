@@ -11,7 +11,7 @@ Status: ✅ done · 🚧 in progress · ⬜ not started
 | 1 | ✅ Cross-command dependencies (read/write sets) | §Interference, Table I, abstract | `merger.py` | small |
 | 2 | ✅ Exit locations for guide/follow | §Commands and segments | `merger.py` | done |
 | 3 | ✅ Commands with no leading `go_to` (+ named start, improvements.md §5) | §Commands and segments | `merger.py` | done |
-| 4 | 🚧 Step cost g(x, h, s): λ done (`holding_penalty`); κ, τ, ρ not | §Objective | `merger.py` | small |
+| 4 | 🚧 Step cost g(x, h, s): λ and ρ's distance part done (`holding_penalty`); κ, τ not | §Objective | `merger.py` | small |
 | 5 | ⬜ Greedy baseline (and better fallback above the cap) | §Baselines | `merger.py` | small |
 | 6 | ⬜ Replanning after a failure | §Execution and replanning, title | `merger.py` + `bt_builder.py` + `leaf_behaviours.py` | medium |
 | 7 | ⬜ Interleaving-bonus bit, 420 s time limit | §Objectives that are not additive | `merger.py` | medium |

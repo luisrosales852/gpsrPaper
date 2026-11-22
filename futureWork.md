@@ -12,7 +12,7 @@ Size: S = a day or less · M = a few days · L = a project of its own.
 |---|---|---|---|---|
 | d / v | travel time | metres (v = 1) | one sentence in the paper: with v constant the argmin is the same | — |
 | λ on hops | `(1 + λ·[h ≠ ∅])·d` | ✅ `holding_penalty` | pick λ: from the score sheet or a held-out set of batches (paper todo) | S |
-| ρ(s, h) | holding time *inside* a segment | not modelled | distance part: escort legs driven while holding. Time part needs τ | S (distance) |
+| ρ(s, h) | holding time *inside* a segment | ✅ distance part (escort legs while holding) | time part (dwelling while holding) needs τ | S + robot logs |
 | κ | fixed overhead per real move | not modelled | `step += κ` when the hop length > 0; value measured on the robot | S + robot logs |
 | τ(s) | action durations | not modelled | changes no order by itself (every schedule runs every segment); needed for ρ's time part, the deadline and the MDP | S + robot logs |
 

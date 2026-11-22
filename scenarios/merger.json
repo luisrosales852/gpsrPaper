@@ -4541,5 +4541,157 @@
         ]
       ]
     }
+  },
+  {
+    "name": "holding_penalty_zero_guides_while_holding",
+    "commands": [
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "kitchen"
+        },
+        {
+          "action": "pick_object",
+          "object_to_pick": "cup"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "dining_table"
+        },
+        {
+          "action": "place_object"
+        }
+      ],
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "kitchen"
+        },
+        {
+          "action": "find_person"
+        },
+        {
+          "action": "guide_person_to",
+          "destination_room": "garage"
+        }
+      ]
+    ],
+    "coords": {
+      "kitchen": [
+        0,
+        0
+      ],
+      "garage": [
+        10,
+        0
+      ],
+      "dining_table": [
+        5,
+        3
+      ]
+    },
+    "origin": [
+      0,
+      -1
+    ],
+    "description": "Plain travel: pick the cup, guide the person to the garage with it, then place it: 5.83 m of hops (vs 11.66 m placing first), but the cup is carried 15.83 m instead of 5.83 m.",
+    "expect": {
+      "per_command_order": true,
+      "non_goto_preserved": true,
+      "gripper_invariant": true,
+      "go_to_order": [
+        "kitchen",
+        "dining_table"
+      ],
+      "action_before": [
+        [
+          [
+            1,
+            2
+          ],
+          [
+            0,
+            3
+          ]
+        ]
+      ]
+    }
+  },
+  {
+    "name": "holding_penalty_counts_escorts_while_holding",
+    "commands": [
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "kitchen"
+        },
+        {
+          "action": "pick_object",
+          "object_to_pick": "cup"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "dining_table"
+        },
+        {
+          "action": "place_object"
+        }
+      ],
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "kitchen"
+        },
+        {
+          "action": "find_person"
+        },
+        {
+          "action": "guide_person_to",
+          "destination_room": "garage"
+        }
+      ]
+    ],
+    "coords": {
+      "kitchen": [
+        0,
+        0
+      ],
+      "garage": [
+        10,
+        0
+      ],
+      "dining_table": [
+        5,
+        3
+      ]
+    },
+    "origin": [
+      0,
+      -1
+    ],
+    "holding_penalty": 1.0,
+    "description": "Same batch with holding_penalty 1 (flips above ~0.58): place the cup first, come back and guide. Pricing only the hops would keep the guide-while-holding order, since the 10 m guide itself is inside a segment.",
+    "expect": {
+      "per_command_order": true,
+      "non_goto_preserved": true,
+      "gripper_invariant": true,
+      "go_to_order": [
+        "kitchen",
+        "dining_table",
+        "kitchen"
+      ],
+      "action_before": [
+        [
+          [
+            0,
+            3
+          ],
+          [
+            1,
+            1
+          ]
+        ]
+      ]
+    }
   }
 ]

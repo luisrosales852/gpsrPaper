@@ -34,7 +34,7 @@ The merger is intentionally framework-free: it talks to BAML objects via
 ``getattr`` so unit tests can pass simple stand-ins.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, FrozenSet, List, Optional, Sequence, Tuple
 
@@ -102,6 +102,9 @@ class _Segment:
     exit: Optional[str] = None
     # True for actions before the command's first go_to: they run at the origin.
     at_origin: bool = False
+    # Escorts with a destination, in order: (gripper state set earlier in the
+    # segment, None if the segment's start state still holds; destination).
+    escorts: List[Tuple[Optional[bool], str]] = field(default_factory=list)
     reads: FrozenSet[_Var] = frozenset()
     writes: FrozenSet[_Var] = frozenset()
 
@@ -118,10 +121,11 @@ def _decompose(cmd_idx: int, command: Any) -> List[_Segment]:
     cur_indices: List[int] = []
     cur_end: Optional[bool] = None
     cur_exit: Optional[str] = None
+    cur_escorts: List[Tuple[Optional[bool], str]] = []
     seen_go_to = False
 
     def flush() -> None:
-        nonlocal cur_indices, cur_end, cur_exit
+        nonlocal cur_indices, cur_end, cur_exit, cur_escorts
         if cur_indices:
             segments.append(
                 _Segment(
@@ -131,11 +135,13 @@ def _decompose(cmd_idx: int, command: Any) -> List[_Segment]:
                     ends_holding=cur_end,
                     exit=cur_exit,
                     at_origin=not seen_go_to,
+                    escorts=cur_escorts,
                 )
             )
         cur_indices = []
         cur_end = None
         cur_exit = None
+        cur_escorts = []
 
     for i, action in enumerate(actions):
         kind = _kind(action)
@@ -154,6 +160,7 @@ def _decompose(cmd_idx: int, command: Any) -> List[_Segment]:
                 dest = getattr(action, _ESCORT_DESTINATION[kind], None)
                 if isinstance(dest, str) and dest.strip():
                     cur_exit = dest
+                    cur_escorts.append((cur_end, dest))
     flush()
     return segments
 
@@ -278,14 +285,9 @@ def _euclidean_distance(locator: Locator, origin: Optional[Tuple[float, float]])
     return dist
 
 
-def _cost_matrix(
-    segments: Sequence[_Segment],
-    distance: DistanceFn,
-    has_origin: bool,
-    origin_name: Optional[str] = None,
-) -> Tuple[List[float], List[List[float]]]:
-    """Seed costs and segment-to-segment costs, querying ``distance`` once per
-    distinct location pair. Unresolved or unreachable locations cost LARGE_M."""
+def _pricer(distance: DistanceFn, has_origin: bool) -> Callable[[Any, Any], float]:
+    """``cost(a, b)`` between names or ``_ORIGIN``, querying ``distance`` once per
+    distinct pair. Unresolved or unreachable locations cost LARGE_M."""
     memo: dict = {}
 
     def cost(a: Any, b: Any) -> float:
@@ -303,6 +305,17 @@ def _cost_matrix(
             memo[(a, b)] = LARGE_M if d is None or not d < LARGE_M else d
         return memo[(a, b)]
 
+    return cost
+
+
+def _cost_matrix(
+    segments: Sequence[_Segment],
+    distance: DistanceFn,
+    has_origin: bool,
+    origin_name: Optional[str] = None,
+) -> Tuple[List[float], List[List[float]]]:
+    """Seed costs and segment-to-segment costs."""
+    cost = _pricer(distance, has_origin)
     M = len(segments)
     start = _ORIGIN if origin_name is None else origin_name
     entry = [start if seg.at_origin else seg.location for seg in segments]
@@ -311,6 +324,24 @@ def _cost_matrix(
             for u, seg in enumerate(segments)]
     edge = [[cost(leave[a], entry[b]) for b in range(M)] for a in range(M)]
     return seed, edge
+
+
+def _carried_inside(segments: Sequence[_Segment], cost: Callable[[Any, Any], float],
+                    start: Any) -> List[Tuple[float, float]]:
+    """Per segment, escort metres driven while holding: (starting empty, starting
+    held). Actions before the first go_to start at ``start``; unknown legs count 0."""
+    out = []
+    for seg in segments:
+        here = start if seg.at_origin else seg.location
+        carried = [0.0, 0.0]
+        for held_now, dest in seg.escorts:
+            d = cost(here, dest)
+            for start_held in (0, 1):
+                if (start_held if held_now is None else held_now) and d < LARGE_M:
+                    carried[start_held] += d
+            here = dest
+        out.append((carried[0], carried[1]))
+    return out
 
 
 def _build_holding_after(
@@ -369,13 +400,17 @@ def _optimal_schedule(
     ran the latest segment (-1 at the start). ``seg_ids[c][j]`` is the flat
     index of command c's j-th segment. States are expanded in layers of equal
     sum(k). O(n^2 * prod(L_c + 1)). Until the robot moves, steps cost ``seed``.
-    A hop driven while holding an object costs ``1 + holding_penalty`` times its length.
+    Every metre driven while holding an object, on a hop or escorting inside a
+    segment, costs ``holding_penalty`` extra.
     """
     M = len(segments)
     if M == 0:
         return []
 
     seed, edge = _cost_matrix(segments, distance, has_origin, origin_name)
+    cost = _pricer(distance, has_origin)
+    inside = _carried_inside(segments, cost, _ORIGIN if origin_name is None else origin_name)
+    inside_unmoved = _carried_inside(segments, cost, _ORIGIN)
     still = ({u for u, seg in enumerate(segments) if seg.at_origin and seg.exit is None}
              if origin_name is not None else set())
     seg_lens = [len(ids) for ids in seg_ids]
@@ -394,10 +429,10 @@ def _optimal_schedule(
             cur_cost = f[state]
             holder = _gripper_holder(k, holding_after)
             here = seg_ids[last][k[last] - 1] if last >= 0 else -1
-            row = edge[here] if here >= 0 else seed
-            if here in still and all(k[d] == 0 or (k[d] == 1 and seg_ids[d][0] in still)
-                                     for d in range(n)):
-                row = seed
+            unmoved = here < 0 or (here in still and all(
+                k[d] == 0 or (k[d] == 1 and seg_ids[d][0] in still) for d in range(n)))
+            row = seed if unmoved else edge[here]
+            carried = inside_unmoved if unmoved else inside
             for c in range(n):
                 if k[c] == seg_lens[c]:
                     continue
@@ -412,6 +447,7 @@ def _optimal_schedule(
                     step = row[u] + (_TIEBREAK_EPSILON if c != last else 0.0)
                 if holder is not None:
                     step += holding_penalty * row[u]
+                step += holding_penalty * carried[u][holder is not None]
                 nxt = (k[:c] + (k[c] + 1,) + k[c + 1:], c)
                 cand = cur_cost + step
                 if cand < f.get(nxt, INF):

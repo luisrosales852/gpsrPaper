@@ -138,8 +138,8 @@ def planned_travel(plan_actions: Sequence[PlanAction], commands: Sequence[Any], 
     """The merger's travel objective, re-derived per action: go_to hops priced
     from where the robot last ended (escort destinations included), and actions
     before a command's first go_to priced at the origin (driven by the inserted
-    go_to when ``origin_name`` is given). Hops driven while holding count
-    ``1 + holding_penalty``. Unknown hops count 0."""
+    go_to when ``origin_name`` is given). Every metre driven while holding, on
+    a hop or an escort, adds ``holding_penalty``. Unknown hops count 0."""
     origin = object()
     pos = origin
     total = 0.0
@@ -175,6 +175,8 @@ def planned_travel(plan_actions: Sequence[PlanAction], commands: Sequence[Any], 
         held = (held or pa.requires_gripper) and not pa.releases_gripper
         dest = getattr(pa.action, _ESCORT_DEST.get(kind, ""), None) if kind in _ESCORT_DEST else None
         if isinstance(dest, str) and dest.strip():
+            if held:
+                total += holding_penalty * hop(pos, dest)
             pos = dest
     return total
 

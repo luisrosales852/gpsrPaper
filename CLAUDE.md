@@ -30,7 +30,7 @@ Corollaries:
 ## Commands
 
 ```bash
-python3 run_scenarios.py          # merger smoke test — expect 60/60
+python3 run_scenarios.py          # merger smoke test — expect 62/62
 python3 run_scenarios.py -v       # also print the merged ordering per scenario
 
 # Simulation (needs the venv; Python 3.14)
@@ -71,7 +71,7 @@ gpsr_merger/           THE CONTRIBUTION — no third-party deps except py_trees 
   leaf_behaviours.py   ActionLeaf, SequentialFallbackLeaf, OneShotCallbackLeaf
   timeouts.py          per-action budgets + GLOBAL_BUDGET_S (300 s)
   status.py            vendored 11-line Status enum
-scenarios/merger.json  60 declarative scheduler scenarios (commands + coords + expect)
+scenarios/merger.json  62 declarative scheduler scenarios (commands + coords + expect)
 tests/_merger_helpers.py  invariant checkers, BAML stand-in builder, expect-evaluator
 tests/test_sim_run.py     17 tests on real headless sim runs (incl. collision checks)
 tests/test_progress_dp.py differential test: progress-vector DP vs tests/_heldkarp_oracle.py
@@ -141,14 +141,17 @@ Things that will bite you:
   like `distance=`) makes a room overlap the spots inside it; without it only equal
   names conflict. `dependencies=False` = travel-only, for ablations. Sim passes
   `World.room_of` (zones). `scenarios/merger.json` `dep_*` pin the cases.
-- **`holding_penalty` (λ, default 0).** A hop driven while some command holds
-  an object costs `1 + λ` times its length (`step += holding_penalty * row[u]`
-  when the DP state has a holder). Still exact: the holder is a function of k
+- **`holding_penalty` (λ, default 0).** Every metre driven while some command
+  holds an object costs λ extra: hops (`holding_penalty * row[u]` when the DP
+  state has a holder) and escort legs inside a segment (the paper's ρ, distance
+  part: `_carried_inside`, from `_Segment.escorts`, split by whether the
+  segment starts holding; legs of a headless escort start at the pose while the
+  robot has not moved). Still exact: both depend only on the state
   (`test_holding_penalty_is_exact`, brute force). `planned_travel(...,
-  holding_penalty=)` re-derives it. `holding_penalty_*` scenarios pin a flip;
-  `bench_holding.py` gives the trade-off (λ=1: carried ≤ sequential, travel
-  +2.5% over λ=0). Only hops count; in-segment escorts while holding (the
-  paper's ρ) and κ, τ are not modelled.
+  holding_penalty=)` re-derives it. `holding_penalty_*` scenarios pin the flips
+  (`..._counts_escorts_while_holding` fails if only hops count);
+  `bench_holding.py` gives the trade-off (λ=1: carried 6.49 m vs 8.04 at λ=0 and
+  6.22 sequential, travel +2.9%). κ and τ are not modelled (`futureWork.md`).
 - **`distance=` is the only metric hook.** `merge(..., distance=fn)` replaces
   `_euclidean`. It takes location **names**, `fn(from_name | None, to_name)`, where
   `None` is the robot origin (only asked when `origin` is not None) — the same
@@ -273,7 +276,7 @@ people (a kind missing there is assumed to touch no shared state).
 
 ## Scope limits worth remembering
 
-- Only `showcase_merge`, `showcase_all_leaves` and `showcase_exits` are fully provisioned in the apartment. The 60
+- Only `showcase_merge`, `showcase_all_leaves` and `showcase_exits` are fully provisioned in the apartment. The 62
   scenarios in `scenarios/merger.json` are unit tests *for the scheduler*; they
   reference locations like `A`/`loc7` and people like `Jane` that do not exist in
   the apartment, so their perception leaves correctly report `TARGET_NOT_FOUND`.
