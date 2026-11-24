@@ -6,35 +6,20 @@ Changes made in `gpsrPaper/gpsr_merger/` that are **not yet in
 
 ---
 
-## 9. Price the return trip and navigation overhead
+## 9. Price fixed navigation overhead
 
-The paper's objective includes a fixed navigation overhead, and the trial
-clock includes the return to the instruction point. The default merger
-objective minimizes the route up to the last task. Two opt-in parameters now
-let the same DP account for costs that the executor can incur afterward or
-between tasks.
-
-- `return_to` adds the directed path length from the last segment's exit
-  to a named destination. The last segment may end at an escort destination.
-  The return distance gets the holding penalty if the nominal final state
-  still holds an object. The executor continues to own the actual return and
-  enforce the live deadline.
-- `navigation_overhead` is an extra distance-equivalent cost on each
-  reachable navigation leg with positive length, including any priced
-  return. A shared stop costs zero extra. Escort and skill timing are
-  separate from this term.
-- These costs reuse the existing progress states and terminal pose. The
-  options default to the previous behavior, including the planner runtime
-  benchmark and paired recovery trials.
+`navigation_overhead` implements the paper's fixed navigation cost. It
+adds a distance-equivalent cost to each reachable navigation leg with
+positive length in the command plan. A shared stop costs zero extra.
+The option defaults to zero for the runtime benchmark and paired recovery
+trials. The merger ranks travel through the last task. The executor
+handles the return to the instruction point on the shared deadline.
 
 ### How to port it to home2
 
-Port `merger.py` and pass `return_to=instruction_point` in the
-`GPSRTM._execute_interleaved_batch` call to `merge`. Supply the live pose
-and the named instruction point separately. Include directed paths from
-possible final stops and escort exits to the instruction point in the Nav2
-path matrix. In the initial deployment, enable return pricing and leave
-`navigation_overhead=0.0` while collecting timings.
+Port `merger.py` and pass the calibrated `navigation_overhead` in the
+`GPSRTM._execute_interleaved_batch` call to `merge`. Leave the value at
+zero while collecting timings.
 
 Estimate the fixed time spent starting navigation from the robot's logs,
 including dispatch, any motion preparation and any announcement that blocks
@@ -46,28 +31,14 @@ the calibrated cost.
 
 ### Verification
 
-Tests compare both costs against exhaustive feasible schedules for 150
+Tests compare the cost against exhaustive feasible schedules for 150
 small batches with asymmetric paths. A separate test shows the overhead
 breaking a travel-distance tie in favor of one visit to a shared stop.
-The three MuJoCo showcases used the same orders at a 2.2 m overhead.
-In MuJoCo, pricing just the return
-changed the following successful, fault-free runs. Times and distances
-include return.
-
-| Scenario | Travel-only plan | Return priced |
-| --- | ---: | ---: |
-| `showcase_merge` | 135.45 s, 41.58 m | 130.05 s, 39.96 m |
-| `showcase_all_leaves` | 148.85 s, 43.79 m | 138.45 s, 38.80 m |
-| `showcase_exits` | 122.05 s, 40.59 m | 122.05 s, 40.59 m |
-
-Reproduce with `.venv/bin/python -m sim.run_sim --mode merged --no-video`
-and `--scenario showcase_all_leaves`, comparing runs with and without
-`--price-return`. For the live acceptance check, compare total travel and
-time through arrival at the instruction point, using the same commands
-and initial pose. Also check goal completion and the gripper invariant.
-The planner's terminal cost ranks nominal schedules. Live time reservation
-for ordinary work and recovery still requires measured durations and a
-budget check in the executor.
+The three MuJoCo showcases used the same orders at a 2.2 m overhead. Replay
+with `--mode merged --no-video --navigation-overhead 2.2` and compare with
+the default. For the live acceptance check, use the same commands and
+initial pose. Record how many navigation goals started, elapsed time
+through the return, goal completion, and gripper state.
 
 ---
 

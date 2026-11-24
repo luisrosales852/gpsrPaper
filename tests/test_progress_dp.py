@@ -248,9 +248,9 @@ def test_holding_penalty_is_exact():
     assert changed > 0  # the penalty does change some plans
 
 
-def test_return_and_navigation_overhead_match_brute_force():
+def test_navigation_overhead_matches_brute_force():
     rng = random.Random(SEED + 5)
-    changed = {"return_to": 0, "navigation_overhead": 0}
+    changed = 0
     for _ in range(150):
         coords = {name: [rng.uniform(0, 12), rng.uniform(0, 8)] for name in [*LOCS, "S"]}
         pose = (coords["S"][0] + 0.5, coords["S"][1])
@@ -262,19 +262,18 @@ def test_return_and_navigation_overhead_match_brute_force():
         kw = dict(origin=pose, distance=distance, dependencies=False, origin_name="S",
                   holding_penalty=0.5)
         base = merge(commands, **kw)
-        cases = ({"return_to": "S"}, {"navigation_overhead": 3.0},
-                 {"return_to": "S", "navigation_overhead": 3.0})
-        for objective in cases:
-            def cost(actions):
-                return planned_travel(actions, commands, distance, True, "S", 0.5, **objective)
+        overhead = 3.0
 
-            best = min(map(cost, orders))
-            plan = merge(commands, **kw, **objective)
-            assert cost(plan.actions) <= best + 1e-6
-            assert plan.fallback == base.fallback
-            if len(objective) == 1 and cost(base.actions) > best + 1e-6:
-                changed[next(iter(objective))] += 1
-    assert all(changed.values()), changed
+        def cost(actions):
+            return planned_travel(actions, commands, distance, True, "S", 0.5,
+                                  navigation_overhead=overhead)
+
+        best = min(map(cost, orders))
+        plan = merge(commands, **kw, navigation_overhead=overhead)
+        assert cost(plan.actions) <= best + 1e-6
+        assert plan.fallback == base.fallback
+        changed += cost(base.actions) > best + 1e-6
+    assert changed > 0
 
 
 def test_navigation_overhead_favors_one_visit_to_a_shared_stop():

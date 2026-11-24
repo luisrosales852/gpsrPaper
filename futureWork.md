@@ -12,7 +12,7 @@ Size: S = a day or less · M = a few days · L = a project of its own.
 | d / v | travel time | metres (v = 1) | one sentence in the paper: with v constant the argmin is the same | — |
 | λ on hops | `(1 + λ·[h ≠ ∅])·d` | ✅ `holding_penalty` | pick λ: from the score sheet or a held-out set of batches (paper todo) | S |
 | ρ(s, h) | holding time *inside* a segment | ✅ distance part (escort legs while holding) | time part (dwelling while holding) needs τ | S + robot logs |
-| κ | fixed overhead per real move | opt-in `navigation_overhead` on positive-distance navigation and return | measure the robot's overhead and convert seconds to distance-equivalent cost | robot logs |
+| κ | fixed overhead per real move | opt-in `navigation_overhead` on positive-distance navigation in the command plan | measure the robot's overhead and convert seconds to distance-equivalent cost | robot logs |
 | τ(s) | action durations | not modelled | changes no order by itself (every schedule runs every segment); needed for ρ's time part, the deadline and the MDP | S + robot logs |
 
 ## §III-A Algorithm 1
@@ -28,9 +28,7 @@ Size: S = a day or less · M = a few days · L = a project of its own.
   committee's definition of "meaningful" interleaving. M
 - **Time limit**: elapsed time t in the state, Δ = 1 s, T_max = 420 s
   (315,000 states with the bonus bit). Needs τ and κ in seconds. Note
-  `_STATE_CAP` is 2×10⁵, below that count. The existing `return_to`
-  option ranks nominal return costs using the current states. Budget
-  feasibility still needs elapsed time. M
+  `_STATE_CAP` is 2×10⁵, below that count. M
 
 ## Replanning and stochastic recovery
 

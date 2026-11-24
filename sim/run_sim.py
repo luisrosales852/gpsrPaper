@@ -96,14 +96,10 @@ def start_name(world: World, origin: Optional[Tuple[float, float]]) -> Optional[
 def _plan(world, commands, origin, args):
     distance = merger_distance(world, planning_router(world), origin)
     origin_name = start_name(world, origin)
-    price_return = getattr(args, "price_return", False)
-    if price_return and origin_name is None:
-        raise SystemExit("--price-return requires the scenario origin to be a named location")
     plan = merge(
         commands, origin=origin, distance=distance, room_of=world.room_of,
         origin_name=origin_name, holding_penalty=getattr(args, "holding_penalty", 0.0),
         navigation_overhead=getattr(args, "navigation_overhead", 0.0),
-        return_to=origin_name if price_return else None,
     )
     return plan, distance, origin_name
 
@@ -210,7 +206,6 @@ def run_once(sc: dict, mode: str, out_dir: str, args) -> dict:
 
     extra = {
         "tree_status": str(root.status),
-        "planner_priced_return": mode == "merged" and getattr(args, "price_return", False),
         "planner_navigation_overhead_m": (
             getattr(args, "navigation_overhead", 0.0) if mode == "merged" else 0.0
         ),
@@ -277,8 +272,6 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true", help="print the merged order and exit")
     ap.add_argument("--holding-penalty", type=float, default=0.0,
                     help="extra cost per metre driven while holding (paper's lambda)")
-    ap.add_argument("--price-return", action="store_true",
-                    help="include the final drive to the named start in the planner objective")
     ap.add_argument("--navigation-overhead", type=float, default=0.0, metavar="METRES",
                     help="distance-equivalent cost per nonzero navigation hop")
     args = ap.parse_args()

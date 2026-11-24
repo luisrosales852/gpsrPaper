@@ -135,7 +135,7 @@ _ESCORT_DEST = {"follow_person_until": "destination", "guide_person_to": "destin
 
 def planned_travel(plan_actions: Sequence[PlanAction], commands: Sequence[Any], distance,
                    has_origin: bool, origin_name=None, holding_penalty=0.0, *,
-                   return_to=None, navigation_overhead=0.0) -> float:
+                   navigation_overhead=0.0) -> float:
     """The merger's travel objective, re-derived per action: go_to hops priced
     from where the robot last ended (escort destinations included), and actions
     before a command's first go_to priced at the origin (driven by the inserted
@@ -183,8 +183,6 @@ def planned_travel(plan_actions: Sequence[PlanAction], commands: Sequence[Any], 
             if held:
                 total += holding_penalty * hop(pos, dest)
             pos = dest
-    if return_to is not None and plan_actions:
-        total += navigation(pos, return_to, 1.0 + holding_penalty if held else 1.0)
     return total
 
 

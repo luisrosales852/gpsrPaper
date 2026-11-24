@@ -92,10 +92,9 @@ are independent choices.
 .venv/bin/pytest -q
 ```
 
-Use `--price-return` to include the final drive to the named start in the
-planner objective and `--navigation-overhead METRES` to add a fixed
-distance-equivalent cost per positive-distance drive. These are opt-in
-planner settings. The simulator executes and times the return either way.
+Use `--navigation-overhead METRES` to add a fixed distance-equivalent cost
+per positive-distance navigation leg in the command plan. The simulator
+executes and times the return separately.
 
 Merged simulation defaults to `skip-defer`. The `build_tree()` default is
 `sequential-fallback`. Select `sequential-fallback`, `skip-only`, or
