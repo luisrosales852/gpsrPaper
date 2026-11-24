@@ -34,7 +34,8 @@ The merger is intentionally framework-free: it talks to BAML objects via
 ``getattr`` so unit tests can pass simple stand-ins.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from math import isfinite
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, FrozenSet, List, Optional, Sequence, Tuple
 
@@ -72,12 +73,15 @@ class PlanAction:
     location: Optional[str]
     requires_gripper: bool
     releases_gripper: bool
+    purpose: str = "plan"
+    navigation_goals: Tuple[Tuple[int, int], ...] = ()
 
 
 @dataclass
 class InterleavedPlan:
     actions: List[PlanAction]
     fallback: List[List[PlanAction]]
+    origin_name: Optional[str] = None
 
 
 Locator = Callable[[str], Optional[Tuple[float, float]]]
@@ -319,11 +323,17 @@ def _cost_matrix(
     M = len(segments)
     start = _ORIGIN if origin_name is None else origin_name
     entry = [start if seg.at_origin else seg.location for seg in segments]
-    leave = [entry[u] if seg.exit is None else seg.exit for u, seg in enumerate(segments)]
+    leave = [_segment_exit(seg, start) for seg in segments]
     seed = [cost(_ORIGIN, entry[u]) if has_origin and not seg.at_origin else 0.0
             for u, seg in enumerate(segments)]
     edge = [[cost(leave[a], entry[b]) for b in range(M)] for a in range(M)]
     return seed, edge
+
+
+def _segment_exit(segment: _Segment, start: Any) -> Any:
+    if segment.exit is not None:
+        return segment.exit
+    return start if segment.at_origin else segment.location
 
 
 def _carried_inside(segments: Sequence[_Segment], cost: Callable[[Any, Any], float],
@@ -393,6 +403,9 @@ def _optimal_schedule(
     needs: Optional[Sequence[Sequence[Sequence[Tuple[int, int]]]]] = None,
     origin_name: Optional[str] = None,
     holding_penalty: float = 0.0,
+    *,
+    return_to: Optional[str] = None,
+    navigation_overhead: float = 0.0,
 ) -> List[int]:
     """DP over per-command progress vectors.
 
@@ -402,6 +415,8 @@ def _optimal_schedule(
     sum(k). O(n^2 * prod(L_c + 1)). Until the robot moves, steps cost ``seed``.
     Every metre driven while holding an object, on a hop or escorting inside a
     segment, costs ``holding_penalty`` extra.
+    Optionally charge a fixed cost for driving to a segment, and price the
+    final drive to ``return_to`` from the last segment's exit.
     """
     M = len(segments)
     if M == 0:
@@ -409,7 +424,8 @@ def _optimal_schedule(
 
     seed, edge = _cost_matrix(segments, distance, has_origin, origin_name)
     cost = _pricer(distance, has_origin)
-    inside = _carried_inside(segments, cost, _ORIGIN if origin_name is None else origin_name)
+    start_location = _ORIGIN if origin_name is None else origin_name
+    inside = _carried_inside(segments, cost, start_location)
     inside_unmoved = _carried_inside(segments, cost, _ORIGIN)
     still = ({u for u, seg in enumerate(segments) if seg.at_origin and seg.exit is None}
              if origin_name is not None else set())
@@ -445,6 +461,8 @@ def _optimal_schedule(
                     step = seed[u] + _TIEBREAK_EPSILON * c
                 else:
                     step = row[u] + (_TIEBREAK_EPSILON if c != last else 0.0)
+                if navigation_overhead and 0 < row[u] < LARGE_M:
+                    step += navigation_overhead
                 if holder is not None:
                     step += holding_penalty * row[u]
                 step += holding_penalty * carried[u][holder is not None]
@@ -459,10 +477,19 @@ def _optimal_schedule(
     full = tuple(seg_lens)
     best: Optional[Tuple[Tuple[int, ...], int]] = None
     best_cost = INF
+    final_holder = _gripper_holder(full, holding_after) if return_to is not None else None
+    stayed_at_origin = all(seg.at_origin and seg.exit is None for seg in segments)
     for c in range(n):
-        cost = f.get((full, c), INF)
-        if cost < best_cost:
-            best_cost = cost
+        total = f.get((full, c), INF)
+        if return_to is not None and total < INF:
+            last_segment = segments[seg_ids[c][-1]]
+            place = _ORIGIN if stayed_at_origin else _segment_exit(last_segment, start_location)
+            drive = cost(place, return_to)
+            total += drive * (1.0 + holding_penalty if final_holder is not None else 1.0)
+            if 0 < drive < LARGE_M:
+                total += navigation_overhead
+        if total < best_cost:
+            best_cost = total
             best = (full, c)
 
     if best is None:
@@ -495,6 +522,9 @@ def merge(
     room_of: Optional[RoomFn] = None,
     origin_name: Optional[str] = None,
     holding_penalty: float = 0.0,
+    *,
+    return_to: Optional[str] = None,
+    navigation_overhead: float = 0.0,
 ) -> InterleavedPlan:
     """Merge N parsed commands into one interleaved plan.
 
@@ -516,7 +546,13 @@ def merge(
     reach it.
     ``holding_penalty`` (the paper's lambda) makes every metre driven while
     holding an object cost ``1 + holding_penalty``; 0 minimises plain travel.
+    ``return_to`` prices the final drive to a named destination. The executor
+    still owns the return action. ``navigation_overhead`` adds a nonnegative
+    distance-equivalent cost to each reachable, positive-distance go_to hop
+    and final drive. Skill and escort overheads are outside this term.
     """
+    if not isfinite(navigation_overhead) or navigation_overhead < 0:
+        raise ValueError("navigation_overhead must be finite and nonnegative")
     if distance is None:
         loc_fn: Locator = locator if locator is not None else (lambda _: None)
         distance = _euclidean_distance(loc_fn, origin)
@@ -569,12 +605,14 @@ def merge(
             needs,
             origin_name,
             holding_penalty,
+            return_to=return_to,
+            navigation_overhead=navigation_overhead,
         )
 
     actions = _flatten(schedule, flat_segments, commands, origin_name)
     fallback = [_collapse_redundant_go_tos(per) for per in _build_fallback(commands, origin_name)]
 
-    return InterleavedPlan(actions=actions, fallback=fallback)
+    return InterleavedPlan(actions=actions, fallback=fallback, origin_name=origin_name)
 
 
 def _reachable(origin_name: str, commands: Sequence[Any], distance: DistanceFn, has_pose: bool) -> bool:
@@ -602,8 +640,13 @@ def _flatten(
         if seg.at_origin and origin_name is not None:
             actions.append(_go_to_origin(origin_name, seg.cmd))
         for ai in seg.indices:
-            action = commands[seg.cmd].commands[ai]
-            actions.append(_to_plan_action(action, seg.cmd, ai))
+            command = commands[seg.cmd].commands
+            pa = _to_plan_action(command[ai], seg.cmd, ai)
+            if _kind(pa.action) == "go_to" and (
+                ai + 1 == len(command) or _kind(command[ai + 1]) == "go_to"
+            ):
+                pa.navigation_goals = ((seg.cmd, ai),)
+            actions.append(pa)
     return _collapse_redundant_go_tos(actions, start=origin_name)
 
 
@@ -644,15 +687,23 @@ def _collapse_redundant_go_tos(
     """Drop a leading ``go_to X`` whenever the previous action ended at X
     (``start`` is where the robot is before the first action)."""
     last_loc: Optional[str] = start
+    last_drive = None
     out: List[PlanAction] = []
     for pa in actions:
         if _kind(pa.action) in _ESCORT_DESTINATION:
             last_loc = None  # the escort moved the robot
+            last_drive = None
         if _kind(pa.action) == "go_to":
             tgt = getattr(pa.action, "location_to_go", None)
             if tgt is not None and tgt == last_loc:
+                if pa.navigation_goals and last_drive is not None:
+                    prior = out[last_drive]
+                    out[last_drive] = replace(
+                        prior, navigation_goals=prior.navigation_goals + pa.navigation_goals
+                    )
                 continue
             if tgt is not None:
                 last_loc = tgt
+                last_drive = len(out)
         out.append(pa)
     return out

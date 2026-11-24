@@ -60,8 +60,9 @@ class Run:
         self.frame_t = [f[0] for f in log["frames"]]
         self.frame_d = [f[1] for f in log["frames"]]
         ev = log["events"]
-        self.finish_t = max(e["t"] for e in ev if e["phase"] == "end")
-        self.finish_d = max(e["distance_m"] for e in ev if e["phase"] == "end")
+        self.finish_t = self.summary.get("elapsed_s", self.summary.get("task_time_s", 0.0))
+        self.finish_d = self.summary["actual_distance_m"]
+        self.returned = self.summary.get("returned", True)
         # Pair start/end: leaves are synchronous, so events strictly alternate.
         self.segments = []  # (t0, t1, cmd, idx, kind)
         open_ev = None
@@ -71,6 +72,10 @@ class Run:
             elif open_ev is not None:
                 self.segments.append((open_ev["t"], e["t"], e["cmd"], e["idx"], e["kind"]))
                 open_ev = None
+        return_start = self.summary.get("task_time_s", self.finish_t)
+        return_end = self.summary.get("return_finished_s", return_start)
+        if return_end > return_start:
+            self.segments.append((return_start, return_end, -1, -1, "return"))
 
         path = os.path.join(run_dir, "run.mp4")
         probe = subprocess.run(
@@ -110,9 +115,12 @@ class Run:
         return self.frame_d[i]
 
     def action_at(self, t: float) -> Optional[Tuple[int, int, str]]:
-        for (t0, t1, c, i, _k) in self.segments:
+        for t0, t1, c, i, kind in self.segments:
             if t0 <= t < t1:
-                return (c, i, self.labels[c][i])
+                label = self.labels[c][i] if i >= 0 else (
+                    "Returning to start" if kind == "return" else "Revisiting location"
+                )
+                return c, i, label
         return None
 
     def close(self) -> None:
@@ -207,13 +215,14 @@ class Composer:
                 a = DRIVE_SHADE if kind == "go_to" else 1.0
                 xa, xb = self._bar_x(t0), self._bar_x(min(t1, t))
                 if xb - xa >= 0.5:
-                    d.rectangle((xa, y, xb, y + bh), fill=_blend(cmd_color(c), a))
+                    color = DIM if c < 0 else cmd_color(c)
+                    d.rectangle((xa, y, xb, y + bh), fill=_blend(color, a))
             if t >= run.finish_t:
                 fx = self._bar_x(run.finish_t)
                 d.line((fx, y - 4, fx, y + bh + 4), fill=FG, width=3)
                 win = mode == min(MODES, key=lambda m: self.runs[m].finish_t)
-                d.text((fx + 10, y + 7), f"✓ {fmt_t(run.finish_t)}", font=fm,
-                       fill=OK if win else FG)
+                d.text((fx + 10, y + 7), f"{'✓ ' if run.returned else ''}{fmt_t(run.finish_t)}",
+                       font=fm, fill=OK if win and run.returned else FG)
 
         # Axis ticks every 30 s of sim time.
         ya = rows["sequential"] + bh + 10
@@ -260,22 +269,24 @@ class Composer:
         if act is not None:
             c, _i, label = act
             f = font("DejaVuSansMono-Bold.ttf", 16)
-            text = f"▸ cmd {c} · {label}"
+            text = f"▸ cmd {c} · {label}" if c >= 0 else label
+            color = cmd_color(c) if c >= 0 else DIM
             tw = d.textlength(text, font=f)
             bx, by = x + 14, y + self.pane_h - 44
             d.rounded_rectangle((bx, by, bx + tw + 24, by + 30), radius=8,
-                                fill=(20, 22, 28, 220), outline=cmd_color(c) + (255,), width=2)
+                                fill=(20, 22, 28, 220), outline=color + (255,), width=2)
             d.text((bx + 12, by + 5), text, font=f, fill=FG)
 
         if done:
             # Stamp on the pane's top edge (over the wall), so it never hides the trail.
-            stamp = f"✓ DONE  {fmt_t(run.finish_t)}"
+            stamp = f"{'✓ RETURNED' if run.returned else 'RETURN INCOMPLETE'}  {fmt_t(run.finish_t)}"
+            color = OK if run.returned else DIM
             f = font("DejaVuSans-Bold.ttf", 30)
             tw = d.textlength(stamp, font=f)
             sx, sy = x + (self.pane_w - tw) / 2, y + 10
             d.rounded_rectangle((sx - 22, sy - 8, sx + tw + 22, sy + 44), radius=12,
-                                fill=(16, 18, 24, 235), outline=OK + (255,), width=3)
-            d.text((sx, sy), stamp, font=f, fill=OK)
+                                fill=(16, 18, 24, 235), outline=color + (255,), width=3)
+            d.text((sx, sy), stamp, font=f, fill=color)
 
     def _draw_end_card(self, img: Image.Image, alpha: float) -> None:
         m, s = self.runs["merged"], self.runs["sequential"]

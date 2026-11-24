@@ -5,11 +5,8 @@ Each leaf calls the method that matches its action's ``.action`` field
 ``subtask_handlers`` that defines it — the same dispatch model used by
 ``gpsr_task_manager.search_command``.
 
-The leaves are synchronous: ``update()`` blocks for the duration of the
-underlying subtask call, then returns SUCCESS/FAILURE. py_trees Timeout
-decorators only check between ticks, so the *primary* timeout enforcement
-lives inside the subtask managers themselves; the decorators are a
-between-tick safety net.
+The calls are synchronous. Subtask managers enforce the deadlines supplied
+by the executor while the underlying subtask call is active.
 """
 
 from typing import Any, Callable, List, Optional, Sequence, Tuple
@@ -52,14 +49,16 @@ def _unpack_outcome(outcome: Any) -> Tuple[Optional[Status], Any]:
 
 def _dispatch(
     plan_action: PlanAction,
-    method: Callable,
+    method: Optional[Callable],
     on_complete: Optional[Callable[[PlanAction, Any, Any], None]],
     logger: Any,
     on_start: Optional[Callable[[PlanAction], None]] = None,
-) -> Optional[Status]:
+    is_late: Optional[Callable[[], bool]] = None,
+    verify_success: Optional[Callable[[], bool]] = None,
+) -> Status:
     """Call ``method(plan_action.action)``, fire ``on_complete``, return Status.
 
-    Returns ``None`` if the handler raised or returned a non-Status value.
+    Converts missing handlers, exceptions and invalid outcomes into failures.
     """
     if on_start is not None:
         try:
@@ -69,14 +68,24 @@ def _dispatch(
 
     action = plan_action.action
     kind = getattr(action, "action", "")
-    try:
-        outcome = method(action)
-    except Exception:  # noqa: BLE001 — we want the BT to handle it
-        logger.error(f"{kind} raised")
-        return None
-    status, result = _unpack_outcome(outcome)
-    if status is None:
-        logger.warning(f"{kind} returned non-Status outcome {outcome!r}; treating as failure")
+    status, result = Status.EXECUTION_ERROR, None
+    if method is None:
+        logger.error(f"No handler for action '{kind}'")
+    else:
+        try:
+            outcome = method(action)
+        except Exception:  # noqa: BLE001 — we want the BT to handle it
+            logger.error(f"{kind} raised")
+        else:
+            parsed_status, result = _unpack_outcome(outcome)
+            if parsed_status is None:
+                logger.warning(f"{kind} returned non-Status outcome; treating as failure")
+            else:
+                status = parsed_status
+    if is_late is not None and is_late():
+        status, result = Status.TIMEOUT, None
+    elif status == Status.EXECUTION_SUCCESS and verify_success is not None and not verify_success():
+        status, result = Status.EXECUTION_ERROR, None
     if on_complete is not None:
         try:
             on_complete(plan_action, status, result)
@@ -126,22 +135,24 @@ class ActionLeaf(py_trees.behaviour.Behaviour):
 def fallback_order(
     fallback: Sequence[Sequence[PlanAction]],
     is_completed: Optional[Callable[[PlanAction], bool]],
+    *,
+    holder: Optional[int] = None,
 ) -> List[int]:
     """Issue order, except the command holding an object runs right before the
     first other command that still has to pick (one gripper)."""
     order = list(range(len(fallback)))
     if is_completed is None:
         return order
-    holder = None
-    for c, actions in enumerate(fallback):
-        held = False
-        for pa in actions:
-            if pa.requires_gripper and is_completed(pa):
-                held = True
-            if pa.releases_gripper and is_completed(pa):
-                held = False
-        if held:
-            holder = c
+    if holder is None:
+        for c, actions in enumerate(fallback):
+            held = False
+            for pa in actions:
+                if pa.requires_gripper and is_completed(pa):
+                    held = True
+                if pa.releases_gripper and is_completed(pa):
+                    held = False
+            if held:
+                holder = c
     if holder is None:
         return order
     pickers = [c for c in order if c != holder

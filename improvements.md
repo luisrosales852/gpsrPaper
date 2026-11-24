@@ -6,6 +6,119 @@ Changes made in `gpsrPaper/gpsr_merger/` that are **not yet in
 
 ---
 
+## 9. Price the return trip and navigation overhead
+
+The paper's objective includes a fixed navigation overhead, and the trial
+clock includes the return to the instruction point. The default merger
+objective minimizes the route up to the last task. Two opt-in parameters now
+let the same DP account for costs that the executor can incur afterward or
+between tasks.
+
+- `return_to` adds the directed path length from the last segment's exit
+  to a named destination. The last segment may end at an escort destination.
+  The return distance gets the holding penalty if the nominal final state
+  still holds an object. The executor continues to own the actual return and
+  enforce the live deadline.
+- `navigation_overhead` is an extra distance-equivalent cost on each
+  reachable navigation leg with positive length, including any priced
+  return. A shared stop costs zero extra. Escort and skill timing are
+  separate from this term.
+- These costs reuse the existing progress states and terminal pose. The
+  options default to the previous behavior, including the planner runtime
+  benchmark and paired recovery trials.
+
+### How to port it to home2
+
+Port `merger.py` and pass `return_to=instruction_point` in the
+`GPSRTM._execute_interleaved_batch` call to `merge`. Supply the live pose
+and the named instruction point separately. Include directed paths from
+possible final stops and escort exits to the instruction point in the Nav2
+path matrix. In the initial deployment, enable return pricing and leave
+`navigation_overhead=0.0` while collecting timings.
+
+Estimate the fixed time spent starting navigation from the robot's logs,
+including dispatch, any motion preparation and any announcement that blocks
+driving. Multiply that time in seconds by the nominal base speed in m/s to
+get the overhead in metres used by the planner. For example, a measured
+4 s at 0.55 m/s gives 2.2 m. The example is a unit conversion. Measure both
+quantities on the live robot, then replay held-out batches with and without
+the calibrated cost.
+
+### Verification
+
+Tests compare both costs against exhaustive feasible schedules for 150
+small batches with asymmetric paths. A separate test shows the overhead
+breaking a travel-distance tie in favor of one visit to a shared stop.
+The three MuJoCo showcases used the same orders at a 2.2 m overhead.
+In MuJoCo, pricing just the return
+changed the following successful, fault-free runs. Times and distances
+include return.
+
+| Scenario | Travel-only plan | Return priced |
+| --- | ---: | ---: |
+| `showcase_merge` | 135.45 s, 41.58 m | 130.05 s, 39.96 m |
+| `showcase_all_leaves` | 148.85 s, 43.79 m | 138.45 s, 38.80 m |
+| `showcase_exits` | 122.05 s, 40.59 m | 122.05 s, 40.59 m |
+
+Reproduce with `.venv/bin/python -m sim.run_sim --mode merged --no-video`
+and `--scenario showcase_all_leaves`, comparing runs with and without
+`--price-return`. For the live acceptance check, compare total travel and
+time through arrival at the instruction point, using the same commands
+and initial pose. Also check goal completion and the gripper invariant.
+The planner's terminal cost ranks nominal schedules. Live time reservation
+for ordinary work and recovery still requires measured durations and a
+budget check in the executor.
+
+---
+
+## 8. Local recovery and shared deadline
+
+Validated in `gpsrPaper` for the planned RoboCup 2027 port. The snapshot in
+`reference/gpsr_task_manager.py` shows the existing integration point in
+`GPSRTM._execute_interleaved_batch`. Port `recovery.py` with the builder,
+provenance fields in `merger.py`, dispatch changes and timeout constant.
+Use the local `Status` enum and pass the named instruction point to
+`merge(origin_name=...)` with the current pose and Nav2 path lengths.
+
+- **Command context.** At `on_action_start`, set the active source command
+  before dispatch. Store successful facts and target handles by
+  `(source_cmd, source_idx)`. Build speech context from that command's
+  earlier successful results in source order. Keep per-attempt diagnostics
+  distinct from the final exhausted failure and its recovery outcome. Treat
+  `purpose="reacquire"` as a target refresh and `purpose="revisit"` as
+  synthetic navigation. For `purpose="deferred"`, collect the fact silently
+  so the downstream report can speak it once. `report_failure` receives
+  the original action and must select the same command's context.
+- **Gripper.** Wire `gripper_state` to verified empty, occupied, or
+  uncertain readings. Verify acquire and release outcomes physically and
+  preserve ownership across navigation and fallback. A failed pick with
+  verified empty fingers permits other commands' picks. A failed release
+  or ambiguous grasp blocks new picks until verified empty. The adapter
+  must avoid handing over an object to a stale or unverified target.
+- **Live clock.** Pass a monotonic clock and an absolute test deadline via
+  `ExecutionHooks`. Anchor that deadline to the referee's timer and account
+  for any elapsed time before the first tree tick, including command intake
+  and plan announcement. Apply the active deadline inside Nav2, perception,
+  arm, and speech calls and cancel blocking operations at expiry. Use one
+  budget through the return. Wire `return_to_start` to the instruction
+  point and report arrival only after verifying the pose.
+- **Revisit estimates.** Price the route from the current pose through
+  observation and report locations and back to the instruction point.
+  Include reacquisition, skills, speech, and recovery from intermediate
+  stops. Return an unknown estimate when these cannot be bounded. Confirm
+  the target again on the revisit and clear stale locks after failed
+  acquisition.
+- **Acceptance.** Replay the paired three-command cases with live telemetry
+  and check the action starts, reports, gripper state, and return on the
+  test clock. Record plan demonstration only when the operator or referee
+  observes it. Use completed goals and the actual action and trajectory log
+  as evidence for meaningful interleaving, and record official points only
+  from the referee score sheet. The simulator comparison uses the
+  [published 2026.2 rulebook](https://github.com/RoboCupAtHome/RuleBook/releases/tag/2026.2)
+  as its reference for the 420-second fixture and bonus criteria.
+
+---
+
 ## 7. Holding penalty (λ) — 2026-11-21
 
 ### What changed and why
@@ -14,7 +127,7 @@ Interleaving runs other commands' gripper-free segments while one command holds
 an object, so merged plans carry objects further than sequential ones: 8.04 m vs
 6.22 m per batch on 1000 random GPSR-shaped batches (`bench_holding.py`).
 Carrying is where failures cost most (a failure while holding used to lose two
-commands, §6) and where the 300 s limit hurts (an undelivered object earns
+commands, §6) and where the test deadline matters (an undelivered object earns
 nothing).
 
 `merge(..., holding_penalty=λ)` makes every metre driven while holding cost

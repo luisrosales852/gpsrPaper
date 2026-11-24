@@ -19,6 +19,7 @@ from argparse import Namespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from gpsr_merger.bt_builder import RecoveryPolicy  # noqa: E402
 from gpsr_merger.leaf_behaviours import fallback_order  # noqa: E402
 from gpsr_merger.merger import merge  # noqa: E402
 from gpsr_merger.timeouts import GLOBAL_BUDGET_S  # noqa: E402
@@ -58,14 +59,16 @@ def _args(out, fail=None):
         print_tree=False, out=out)
 
 
-def run(mode, scenario="showcase_all_leaves", fail=None):
+def run(mode, scenario="showcase_all_leaves", fail=None, policy=None):
     """One headless run per (scenario, mode, fail), memoised across tests.
     ``scenario`` is a name in scenarios_visual.json or a scenario dict."""
     sc = scenario if isinstance(scenario, dict) else load_scenario(scenario)
-    key = (sc["name"], mode, fail)
+    key = (sc["name"], mode, fail, policy)
     if key not in _cache:
         with tempfile.TemporaryDirectory() as td:
-            summary = run_once(sc, mode, os.path.join(td, mode), _args(td, fail))
+            args = _args(td, fail)
+            args.recovery_policy = policy
+            summary = run_once(sc, mode, os.path.join(td, mode), args)
             import json
             with open(os.path.join(td, mode, "run.json")) as f:
                 _cache[key] = (summary, json.load(f), sc)
@@ -123,7 +126,7 @@ FALLBACK_HOLDER = {"name": "fallback_holder", "origin": [-3.9, 2.5], "commands":
 def test_fallback_finishes_the_held_object_first():
     """A failure while c1 holds the book: the fallback delivers the book before
     c0 picks the cup, so both manipulation commands still succeed."""
-    _, log, _ = run("merged", FALLBACK_HOLDER, ("2.1:3",))
+    _, log, _ = run("merged", FALLBACK_HOLDER, ("2.1:3",), RecoveryPolicy.SEQUENTIAL_FALLBACK)
     ends = _ends(log)
     assert any(e["branch"] == "sequential_fallback" for e in ends)
     _assert_single_item(log)
@@ -271,7 +274,7 @@ def test_planned_cost_is_the_driven_metric():
     stand-off only."""
     for mode in ("merged", "sequential"):
         s, _, _ = run(mode, "showcase_merge")
-        assert abs(s["cost_model_gap_m"]) < 0.02 * s["actual_distance_m"], (
+        assert abs(s["cost_model_gap_m"]) < 0.02 * s["work_distance_m"], (
             mode, s["cost_model_gap_m"], s["actual_distance_m"])
 
 

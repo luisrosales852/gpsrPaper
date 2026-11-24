@@ -9,13 +9,14 @@ execution layer, pulled out of `RoBorregos/home2` for research work.
 gpsr_merger/          the contribution
   merger.py           interleaving planner (progress-vector DP over go_to-led segments)
   bt_builder.py       builds the py_trees tree from a merged plan
-  leaf_behaviours.py  the leaf behaviours (ActionLeaf, SequentialFallbackLeaf, ...)
+  recovery.py        execution phases, recovery policies, and robot adapter hooks
+  leaf_behaviours.py  handler dispatch and legacy leaves
   timeouts.py         per-action + global time budgets
   status.py           vendored from task_manager/utils/status.py (11-line enum)
 tests/
   _merger_helpers.py  invariant checkers + scenario harness
 scenarios/
-  merger.json         40 declarative scenarios (commands + coords + expect block)
+  merger.json         62 declarative scenarios (commands + coords + expect block)
 sim/                  MuJoCo visual simulation (see below)
 reference/
   gpsr_task_manager.py   the real ROS node, UNMODIFIED — on-robot wiring reference
@@ -29,8 +30,7 @@ python3 run_scenarios.py       # 62/62 expected
 python3 run_scenarios.py -v    # also print the merged ordering per scenario
 ```
 
-`merger.py` has **no third-party dependencies at all**. Only `bt_builder.py` and
-`leaf_behaviours.py` need py_trees:
+`merger.py` has no third-party dependencies. The executor uses py_trees.
 
 ```bash
 pip install -r requirements.txt   # py_trees==2.2.3
@@ -79,17 +79,40 @@ python3.14 -m venv .venv
 .venv/bin/pytest tests/test_sim_run.py -q                 # assert on the event log
 ```
 
-The simulator is only a *consumer* of the contribution. `sim/run_sim.py` calls the
-real `merge()` and the real `build_tree()`, exactly as
-`reference/gpsr_task_manager.GPSRTM._execute_interleaved_batch` does, and swaps in
-`sim.handlers.SimSubtaskHandler` for the robot's subtask managers. That works with no
-adapter because `leaf_behaviours._resolve_method` dispatches an action kind to *any*
-object exposing a method of that name — so a simulator is one class with 13 methods
-returning `(Status, result)`. **Nothing under `gpsr_merger/` is modified or patched.**
+The simulator runs the repository's `merge()` and `build_tree()` with
+`SimSubtaskHandler` as the skill adapter. The back-to-back demo uses the
+per-command order in `plan.fallback`. Recovery and the initial ordering
+are independent choices.
 
-The sequential baseline needs no new scheduling code either: `merge()` already
-returns `plan.fallback`, so the baseline is the same executor, the same handlers and
-the same world, with only the ordering changed.
+### Recovery trials
+
+```bash
+.venv/bin/python -m sim.run_sim --mode merged --no-video --recovery-policy skip-defer
+.venv/bin/python -m sim.recovery_trials --out out/recovery
+.venv/bin/pytest -q
+```
+
+Use `--price-return` to include the final drive to the named start in the
+planner objective and `--navigation-overhead METRES` to add a fixed
+distance-equivalent cost per positive-distance drive. These are opt-in
+planner settings. The simulator executes and times the return either way.
+
+Merged simulation defaults to `skip-defer`. The `build_tree()` default is
+`sequential-fallback`. Select `sequential-fallback`, `skip-only`, or
+`skip-defer` with `--recovery-policy` to compare recovery on the same order.
+Each trial records skill attempts, exhausted failures by source command,
+actions skipped, spoken failure reports, and the return outcome.
+
+The seven paired cases produce 21 policy runs and one nominal back-to-back
+comparison. `out/recovery/results.json` records completed goals, partial
+credit, elapsed time and distance including return, and goals recovered by
+deferral. The fixture rubric awards one unit per correct report or delivery
+and half a unit for an unfinished command with a verified pick or correct
+intermediate observation. The [paper](main.tex) reports the comparison.
+The simulator records evidence for the published bonus criteria in the
+nominal case. Plan demonstration and official points require live evidence.
+See the [home2 port notes](improvements.md#8-local-recovery-and-shared-deadline)
+for the planned RoboCup 2027 integration.
 
 | file | role |
 |---|---|
@@ -103,14 +126,15 @@ the same world, with only the ordering changed.
 | `recorder.py` | frames → ffmpeg, plus the event log written to `run.json` |
 | `overlay.py` | PIL HUD; colour-by-source-command |
 | `compose.py` | the side-by-side race video: shared clock, Gantt timeline, end card |
-| `run_sim.py` | CLI: merged / sequential / side-by-side |
+| `run_sim.py` | CLI for merged and back-to-back runs with selectable recovery |
+| `recovery_trials.py` | paired three-command paper trials and trace verification |
 
 ### The demo: `showcase_merge`
 
 Four commands that each zig-zag between the north and south halves of the flat
 (kitchen → garage, bedroom → bookshelf, entrance → bathroom, side table → office).
 One after another they criss-cross the apartment; merged, the DP sweeps each region
-once. Measured in the sim, with all 17 actions succeeding in both runs:
+once. The table measures time and distance before the final return. All 17 actions succeed in each run.
 
 | | time | driven |
 |---|---|---|
@@ -128,16 +152,12 @@ as a demo.
 coloured by command. The merged bar interleaves colours; the sequential bar is four
 blocks with long driving stretches. `out/side_by_side.png` is the final still.
 
-Two properties make a run evidence rather than decoration:
-
-- **The gripper is enforced in the executor, not only in the tests.** `pick_object`
-  hard-fails when something is already held, so a schedule violating the single-item
-  invariant would visibly break the run — an execution-level witness for
-  `_merger_helpers.gripper_invariant_holds`.
-- **Timeouts are enforced inside the handler in sim-time**, against
-  `timeouts.timeout_for`, mirroring the real subtask managers. py_trees' `Timeout`
-  decorator only checks between ticks and the leaves block, so faking a wall-clock
-  abort would misrepresent where enforcement actually lives.
+The tree checks gripper state before every pick and verifies the matching
+object before release. The adapter enforces per-skill deadlines inside
+blocking calls using simulated time. Execution, recovery, and return share
+420 seconds by default. In `run.json`, `elapsed_s` and `actual_distance_m`
+include return. `task_time_s` and `work_distance_m` end before the return.
+The optional video hold is outside the measurement.
 
 **The robot does not drive through things.** `sim/routing/` plans every movement
 on a visibility graph: furniture and standing people are grown by the robot's
@@ -164,8 +184,8 @@ between two collinear locations and checks that the order changes.
 Only `showcase_merge`, `showcase_all_leaves` and `showcase_exits` are fully provisioned. The 62 scenarios in
 `scenarios/merger.json` are unit tests *for the scheduler*: they reference locations
 like `A`/`loc7` and people like `Jane` that the apartment does not contain, so their
-perception leaves correctly report `TARGET_NOT_FOUND` and the tree drops to the
-fallback branch. 13 of the 27 original ones have every `go_to` resolvable, but rendering
+handlers can report `TARGET_NOT_FOUND`. The executor uses the navigation fallback
+when a drive fails. Some fixtures resolve every `go_to`, but rendering
 the rest meaningfully would mean populating the apartment to match each one.
 `run_scenarios.py` remains the check that matters for the merger itself, and passes 62/62.
 

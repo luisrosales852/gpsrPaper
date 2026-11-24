@@ -134,7 +134,8 @@ _ESCORT_DEST = {"follow_person_until": "destination", "guide_person_to": "destin
 
 
 def planned_travel(plan_actions: Sequence[PlanAction], commands: Sequence[Any], distance,
-                   has_origin: bool, origin_name=None, holding_penalty=0.0) -> float:
+                   has_origin: bool, origin_name=None, holding_penalty=0.0, *,
+                   return_to=None, navigation_overhead=0.0) -> float:
     """The merger's travel objective, re-derived per action: go_to hops priced
     from where the robot last ended (escort destinations included), and actions
     before a command's first go_to priced at the origin (driven by the inserted
@@ -155,22 +156,26 @@ def planned_travel(plan_actions: Sequence[PlanAction], commands: Sequence[Any], 
         d = distance(a, b)
         return d if d is not None and d < float("inf") else 0.0
 
+    def navigation(a, b, weight):
+        distance_m = hop(a, b)
+        return weight * distance_m + (navigation_overhead if distance_m > 0 else 0.0)
+
     for pa in plan_actions:
         kind = getattr(pa.action, "action", "")
         weight = 1.0 + holding_penalty if held else 1.0
         if pa.source_idx == -1 and origin_name is None:
-            total += weight * hop(pos, origin)
+            total += navigation(pos, origin, weight)
             pos = origin
             continue
         if kind == "go_to":
             tgt = getattr(pa.action, "location_to_go", None)
             if tgt is not None:
-                total += weight * hop(pos, tgt)
+                total += navigation(pos, tgt, weight)
                 pos = tgt
             continue
         before = list(getattr(commands[pa.source_cmd], "commands", []))[: pa.source_idx]
         if origin_name is None and all(getattr(x, "action", "") != "go_to" for x in before):
-            total += weight * hop(pos, origin)
+            total += navigation(pos, origin, weight)
             pos = origin
         held = (held or pa.requires_gripper) and not pa.releases_gripper
         dest = getattr(pa.action, _ESCORT_DEST.get(kind, ""), None) if kind in _ESCORT_DEST else None
@@ -178,6 +183,8 @@ def planned_travel(plan_actions: Sequence[PlanAction], commands: Sequence[Any], 
             if held:
                 total += holding_penalty * hop(pos, dest)
             pos = dest
+    if return_to is not None and plan_actions:
+        total += navigation(pos, return_to, 1.0 + holding_penalty if held else 1.0)
     return total
 
 

@@ -248,6 +248,49 @@ def test_holding_penalty_is_exact():
     assert changed > 0  # the penalty does change some plans
 
 
+def test_return_and_navigation_overhead_match_brute_force():
+    rng = random.Random(SEED + 5)
+    changed = {"return_to": 0, "navigation_overhead": 0}
+    for _ in range(150):
+        coords = {name: [rng.uniform(0, 12), rng.uniform(0, 8)] for name in [*LOCS, "S"]}
+        pose = (coords["S"][0] + 0.5, coords["S"][1])
+        distance = _asymmetric(coords, pose)
+        commands = build_commands(_named_start_batch(rng))
+        flat, seg_ids, holding_after = _prepare(commands)
+        orders = [_flatten(order, flat, commands, "S")
+                  for order in _feasible_schedules(flat, seg_ids, holding_after)]
+        kw = dict(origin=pose, distance=distance, dependencies=False, origin_name="S",
+                  holding_penalty=0.5)
+        base = merge(commands, **kw)
+        cases = ({"return_to": "S"}, {"navigation_overhead": 3.0},
+                 {"return_to": "S", "navigation_overhead": 3.0})
+        for objective in cases:
+            def cost(actions):
+                return planned_travel(actions, commands, distance, True, "S", 0.5, **objective)
+
+            best = min(map(cost, orders))
+            plan = merge(commands, **kw, **objective)
+            assert cost(plan.actions) <= best + 1e-6
+            assert plan.fallback == base.fallback
+            if len(objective) == 1 and cost(base.actions) > best + 1e-6:
+                changed[next(iter(objective))] += 1
+    assert all(changed.values()), changed
+
+
+def test_navigation_overhead_favors_one_visit_to_a_shared_stop():
+    commands = build_commands([
+        [{"action": "go_to", "location_to_go": place} for place in stops]
+        for stops in (("A", "B"), ("C", "B"))
+    ])
+    locator = make_locator({"A": [0, 0], "B": [5, 0], "C": [10, 0]})
+    options = dict(locator=locator, origin=(0, 0), origin_name="A")
+    default = merge(commands, **options)
+    grouped = merge(commands, navigation_overhead=2.0, **options)
+    assert [a.location for a in default.actions] == ["B", "C", "B"]
+    assert [a.location for a in grouped.actions] == ["C", "B"]
+    assert sorted(grouped.actions[-1].navigation_goals) == [(0, 1), (1, 1)]
+
+
 def test_gpsr_batch_is_fast():
     rng = random.Random(1)
     cmds = [

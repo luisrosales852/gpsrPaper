@@ -56,7 +56,7 @@ python3 bench_holding.py [--latex]                         # travel vs distance 
 - Always run from the repo root (`-m sim.run_sim`, not `python sim/run_sim.py`);
   the entry scripts do `sys.path.insert` of the repo root themselves.
 - Useful flags: `--holding-penalty 1` (λ, default 0); `--fail pick_object:1` or `--fail 0.1:2` (`cmd.idx:count`) to
-  inject failures and exercise Retry → Selector → `sequential_fallback`;
+  inject failures and exercise one of the three recovery policies;
   `--print-tree`; `--scenario <name>`; `--camera iso`.
 - Defaults are tuned for the 1080p race video: `--width 832 --height 720` matches
   the apartment's aspect (no grey side bars), `--speed 3.0`. Both modes must share
@@ -69,7 +69,7 @@ gpsr_merger/           THE CONTRIBUTION — no third-party deps except py_trees 
   merger.py            interleaving planner; merge() -> InterleavedPlan
   bt_builder.py        build_tree() -> py_trees root Selector
   leaf_behaviours.py   ActionLeaf, SequentialFallbackLeaf, OneShotCallbackLeaf
-  timeouts.py          per-action budgets + GLOBAL_BUDGET_S (300 s)
+  timeouts.py          per-action budgets + GLOBAL_BUDGET_S (420 s)
   status.py            vendored 11-line Status enum
 scenarios/merger.json  62 declarative scheduler scenarios (commands + coords + expect)
 tests/_merger_helpers.py  invariant checkers, BAML stand-in builder, expect-evaluator
@@ -164,38 +164,26 @@ Things that will bite you:
 - `plan.fallback` is the per-command original sequence — the sim reuses it
   verbatim as the sequential baseline, so no separate baseline scheduler exists.
 
-### bt_builder.py / leaf_behaviours.py
+### bt_builder.py / recovery.py
 
-```
-Selector "gpsr_root" (memory)
-  ├── Timeout(GLOBAL_BUDGET_S) ▸ Sequence "interleaved"
-  │     └── Retry(2) ▸ Timeout(timeout_for(kind)) ▸ ActionLeaf   (per action)
-  └── Sequence "sequential_fallback"
-        └── SequentialFallbackLeaf  (every command, fallback_order; always SUCCESS)
-```
+The memory sequence ticks the merged order, optional sequential fallback,
+deferral, return, and failure reporting. `build_tree()` defaults to
+`sequential-fallback`, while merged simulator runs default to `skip-defer`.
+The paired trial runner chooses each recovery policy explicitly.
 
-- **Handler dispatch is by method name.** `_resolve_method(kind, handlers)` picks
-  the first object in `subtask_handlers` exposing a callable named after the
-  action kind, calls it with the bare action object, and expects
-  `(Status, result)` (a bare `Status` is tolerated). This is the entire
-  integration surface — no registration, no base class.
-- Leaves are **synchronous and blocking**. py_trees `Timeout` decorators only
-  check between ticks, so real timeout enforcement must live *inside* the
-  handler. `sim/handlers.py` mirrors that with `robot.deadline` in sim-time —
-  do not "fix" it with a wall-clock abort, it would misrepresent where
-  enforcement lives on the robot.
-- The fallback branch always returns SUCCESS: its job is to give every command a
-  chance, not to gate on outcomes.
-- `is_completed` enables *resume* rather than restart in the fallback: a
-  completed non-`go_to` is skipped, and a `go_to` is skipped only when its whole
-  following segment is already done.
-- **Fallback order** (`leaf_behaviours.fallback_order`, decided when the fallback
-  starts): issue order, except the command holding an object (completed pick, no
-  completed release) runs right before the first *other* command that still has
-  to pick. Holder-first would be simpler but reorders gripper-free commands too,
-  breaking conflict order for no physical reason. Pinned by
-  `test_fallback_finishes_the_held_object_first` (sim, injected failure while
-  holding) and `test_fallback_order_moves_the_holder_only_as_far_as_needed`.
+- The skill dispatch resolves methods by action name and accepts a bare
+  `Status` or `(Status, result)`. Status callbacks and reports carry source
+  command and action indices.
+- `ExecutionHooks` supplies the clock, the absolute deadline, gripper
+  verification, revisit estimates, and the return and reporting operations.
+  The clock is simulated in `run_sim.py`. Skills enforce it inside their
+  synchronous calls.
+- Fallback gives the holder's command priority over competing picks. Both
+  local policies keep independent work and shared navigation after a failure.
+  Only independently recoverable information work can be deferred.
+- `.venv/bin/python -m sim.recovery_trials` reproduces the paired paper
+  table. `tests/test_recovery.py` checks the results and failure-specific
+  execution traces. See `improvements.md` for the home2 port requirements.
 
 ### sim/
 
