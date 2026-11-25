@@ -30,11 +30,8 @@ FOLLOW_GAP = 1.15  # m, how far behind a followed person the robot trails
 class SimTimeout(Exception):
     """Raised inside ``_advance`` when a handler's sim-time budget is spent.
 
-    This is how ``timeouts.timeout_for`` is actually enforced. py_trees'
-    ``Timeout`` decorator only checks *between* ticks and the leaves block, so
-    on the real robot the primary enforcement lives inside the subtask managers
-    (see ``leaf_behaviours`` module docstring). The sim reproduces that rather
-    than faking a wall-clock abort.
+    Each blocking skill and the return route enforce their deadline on
+    this clock. The live subtask managers enforce their deadline internally.
     """
 
 
@@ -133,11 +130,14 @@ class SimRobot:
     def sync(self) -> None:
         mujoco.mj_forward(self.m, self.d)
 
+    def _check_step(self, dt: float = DT) -> None:
+        if self.deadline is not None and self.t + dt > self.deadline:
+            raise SimTimeout()
+
     def _advance(self, dt: float) -> None:
         """Commit one tick: clock, kinematics, carried object, recorder."""
+        self._check_step(dt)
         self.t += dt
-        if self.deadline is not None and self.t > self.deadline:
-            raise SimTimeout()
         self.sync()
         if self.held is not None:
             gp = self.d.site_xpos[self._site_gripper]
@@ -159,6 +159,7 @@ class SimRobot:
             err = wrap(target_yaw - self.yaw)
             if abs(err) < 1e-3:
                 break
+            self._check_step()
             step = math.copysign(min(ANG_SPEED * DT, abs(err)), err)
             self.set_pose(*self.xy, self.yaw + step)
             self._advance(DT)
@@ -186,6 +187,7 @@ class SimRobot:
             slack = rem - stop_within
             if slack <= EPS_M:
                 break
+            self._check_step()
             step = min(LIN_SPEED * DT, slack)
             hx, hy = (x - cx) / rem, (y - cy) / rem
             self.set_pose(cx + hx * step, cy + hy * step, math.atan2(hy, hx))
@@ -219,6 +221,7 @@ class SimRobot:
         start = self.yaw
         n = max(2, int(round(duration / DT)))
         for i in range(n):
+            self._check_step()
             phase = math.sin(2.0 * math.pi * (i / n))
             self.set_pose(*self.xy, start + phase * sweep / 2.0)
             self._advance(DT)
@@ -231,15 +234,18 @@ class SimRobot:
         x0, y0, z0 = self.object_xyz(o)
         n = max(1, int(round(duration / DT)))
         for i in range(1, n + 1):
+            self._check_step()
             gp = self.d.site_xpos[self._site_gripper]
             a = i / n
             self.set_object_xyz(o, x0 + (gp[0] - x0) * a, y0 + (gp[1] - y0) * a,
                                 z0 + (gp[2] - z0) * a)
             self._advance(DT)
+        self._check_step()
         self.held = o
         self._advance(DT)
 
     def release(self, to_xyz: Tuple[float, float, float], duration: float = 1.0) -> None:
+        self._check_step()
         o = self.held
         self.held = None
         if o is None:
@@ -247,6 +253,7 @@ class SimRobot:
         x0, y0, z0 = self.object_xyz(o)
         n = max(1, int(round(duration / DT)))
         for i in range(1, n + 1):
+            self._check_step()
             a = i / n
             self.set_object_xyz(o, x0 + (to_xyz[0] - x0) * a, y0 + (to_xyz[1] - y0) * a,
                                 z0 + (to_xyz[2] - z0) * a)
@@ -269,11 +276,12 @@ class SimRobot:
         while True:
             sp = min(tr.length, sp + PERSON_SPEED * DT)
             (px, py), ph = tr.at(sp)
-            self.set_person_xy(p, px, py, ph)
             target = max(sr, sp - FOLLOW_GAP)
             step = min(LIN_SPEED * DT, target - sr)
             if sp >= tr.length and step <= EPS_M:
                 break
+            self._check_step()
+            self.set_person_xy(p, px, py, ph)
             if step > 0.0:
                 sr += step
                 (rx, ry), rh = tr.at(sr)
@@ -289,6 +297,7 @@ class SimRobot:
         tr = _Track(track)
         sr, sp = robot_from, 0.0
         while sr < tr.length - EPS_M:
+            self._check_step()
             step = min(LIN_SPEED * DT, tr.length - sr)
             sr += step
             (rx, ry), rh = tr.at(sr)

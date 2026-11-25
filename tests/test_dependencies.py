@@ -27,8 +27,10 @@ from tests._merger_helpers import (  # noqa: E402
     build_commands,
     conflict_order_preserved,
     gripper_invariant_holds,
+    make_distance,
     make_locator,
     make_room_of,
+    planned_travel,
     merge_kwargs,
     non_goto_actions_preserved,
     per_command_order_preserved,
@@ -57,7 +59,12 @@ def _g(place):
 
 
 def _random_command(rng):
-    kind = rng.choice(["fetch", "count", "describe", "find_tell", "guide", "follow"])
+    kind = rng.choice(["fetch", "count", "describe", "find_tell", "guide", "follow", "here"])
+    if kind == "here":  # no leading go_to: starts where the robot is
+        return [{"action": "find_person", "attribute_value": "waving"},
+                {"action": "get_person_info", "info_type": "name"},
+                _g(rng.choice(PLACES[:-1])),
+                {"action": "say_with_context", "user_instruction": "name"}]
     if kind == "fetch":
         src = rng.choice(["kitchen table", "counter", "side table", "bookshelf", "kitchen"])
         dst = rng.choice(["start", "couch", "side table", "trash bin", "kitchen table"])
@@ -92,7 +99,8 @@ def _random_command(rng):
 def _random_batch(rng):
     while True:
         cmds = [_random_command(rng) for _ in range(rng.randint(2, 4))]
-        n_segs = sum(sum(1 for a in c if a["action"] == "go_to") for c in cmds)
+        n_segs = sum(sum(1 for a in c if a["action"] == "go_to") + (c[0]["action"] != "go_to")
+                     for c in cmds)
         if n_segs <= ORACLE_MAX_M:
             return cmds
 
@@ -151,9 +159,11 @@ def test_random_batches():
             with_conflicts += 1
             if not conflict_order_preserved(travel_only.actions, commands, room_of):
                 travel_only_broken += 1
-        d_dep = _plan_travel(with_deps, locator, origin)
-        d_free = _plan_travel(travel_only, locator, origin)
+        d_dep = planned_travel(with_deps.actions, commands, distance, origin is not None)
+        d_free = planned_travel(travel_only.actions, commands, distance, origin is not None)
         assert d_dep >= d_free - 1e-6, (d_dep, d_free, cmds_json)
+        # The cost the DP minimised equals the travel re-derived from the plan.
+        assert abs(_travel(new, flat, distance, True) - d_dep) < 1e-6, cmds_json
         extra_travel.append(d_dep - d_free)
 
     print(f"random: {with_conflicts}/{N_RANDOM} batches have a cross-command conflict; "
@@ -161,18 +171,6 @@ def test_random_batches():
           f"dependencies cost {sum(extra_travel) / len(extra_travel):.2f} m extra on average")
     assert with_conflicts > N_RANDOM // 4
     assert travel_only_broken > 0
-
-
-def _plan_travel(plan, locator, origin):
-    last, total = origin, 0.0
-    for pa in plan.actions:
-        if pa.action.action == "go_to":
-            xy = locator(pa.action.location_to_go)
-            if xy is not None:
-                if last is not None:
-                    total += ((xy[0] - last[0]) ** 2 + (xy[1] - last[1]) ** 2) ** 0.5
-                last = xy
-    return total
 
 
 def test_every_scenario_with_dependencies_keeps_conflict_order():
@@ -184,7 +182,8 @@ def test_every_scenario_with_dependencies_keeps_conflict_order():
             continue
         commands = build_commands(sc["commands"])
         plan = merge(commands, **kwargs)
-        assert conflict_order_preserved(plan.actions, commands, kwargs.get("room_of")), sc["name"]
+        assert conflict_order_preserved(plan.actions, commands, kwargs.get("room_of"),
+                                        kwargs.get("origin_name")), sc["name"]
 
 
 def test_conflict_free_showcases_keep_their_plan():
@@ -197,6 +196,106 @@ def test_conflict_free_showcases_keep_their_plan():
         b = merge(commands, origin=origin, dependencies=False)
         key = lambda p: [(x.source_cmd, x.source_idx) for x in p.actions]  # noqa: E731
         assert key(a) == key(b), sc["name"]
+
+
+def _positions(actions):
+    """Where the robot is before each action: a name, "@start" or None (unknown)."""
+    pos, out = "@start", []
+    for pa in actions:
+        out.append(pos)
+        kind = pa.action.action
+        if kind == "go_to":
+            pos = pa.action.location_to_go
+        elif kind in ("guide_person_to", "follow_person_until"):
+            dest = getattr(pa.action, "destination_room" if kind == "guide_person_to" else "destination", None)
+            pos = dest if dest else None
+    return out
+
+
+def _check_inserted_go_tos(plan, cmds_json):
+    """Inserted go_to(origin) only where the robot is elsewhere, right before the
+    command's first action; each headless command's fallback starts with one."""
+    A = plan.actions
+    n = 0
+    for i, (pa, pos) in enumerate(zip(A, _positions(A))):
+        if pa.source_idx != -1:
+            continue
+        n += 1
+        assert pos not in ("@start", "origin"), (cmds_json, i)  # never a go_to to where it is
+        nxt = A[i + 1]
+        assert nxt.source_cmd == pa.source_cmd and nxt.source_idx == 0, (cmds_json, i)
+    for c, fb in enumerate(plan.fallback):
+        headless = cmds_json[c][0]["action"] != "go_to"
+        assert (fb[0].source_idx == -1) == headless, (cmds_json, c)
+    return n
+
+
+def test_origin_name_only_adds_the_drive_back():
+    """Travel-only, naming the known start never changes the schedule or its cost;
+    it only inserts a go_to back to it. With dependencies, acting at the start
+    instead of at an unknown place only removes constraints, so travel never grows."""
+    rng = random.Random(SEED + 2)
+    room_of = make_room_of(ROOMS)
+    inserted = improved = 0
+    saved = 0.0
+    work = lambda p: [(x.source_cmd, x.source_idx) for x in p.actions  # noqa: E731
+                      if x.action.action != "go_to"]
+    key = lambda p: [(x.source_cmd, x.source_idx) for x in p.actions]  # noqa: E731
+    for _ in range(N_RANDOM):
+        cmds_json = _random_batch(rng)
+        commands = build_commands(cmds_json)
+        origin = (rng.uniform(0, 9), rng.uniform(-3, 3))
+        locator = make_locator({**COORDS, "origin": list(origin)})
+        distance = _euclidean_distance(locator, origin)
+        kw = dict(locator=locator, origin=origin, room_of=room_of)
+        travel = lambda p, name=None: planned_travel(p.actions, commands, distance, True, name)  # noqa: E731
+
+        plain = merge(commands, dependencies=False, **kw)
+        named = merge(commands, dependencies=False, origin_name="origin", **kw)
+        assert work(plain) == work(named), cmds_json
+        assert abs(travel(plain) - travel(named, "origin")) < 1e-6, cmds_json
+        inserted += _check_inserted_go_tos(named, cmds_json)
+
+        plain = merge(commands, **kw)
+        named = merge(commands, origin_name="origin", **kw)
+        t_plain, t_named = travel(plain), travel(named, "origin")
+        assert t_named <= t_plain + 1e-6, cmds_json
+        assert conflict_order_preserved(named.actions, commands, room_of, "origin"), cmds_json
+        assert per_command_order_preserved(named.actions, len(commands))
+        assert non_goto_actions_preserved(named, commands)
+        inserted += _check_inserted_go_tos(named, cmds_json)
+        if t_named < t_plain - 1e-6:
+            improved += 1
+            saved += t_plain - t_named
+
+        # origin=None + a resolvable name plans exactly like the known origin.
+        unknown = merge(commands, locator=locator, origin=None, room_of=room_of, origin_name="origin")
+        assert key(unknown) == key(named), cmds_json
+    print(f"origin_name: {inserted} inserted go_tos; acting at the start shortens "
+          f"{improved}/{N_RANDOM} plans, by {saved / max(improved, 1):.2f} m on average")
+    assert inserted > 0 and improved > 0
+
+
+def test_unreachable_origin_name_is_ignored():
+    """A start name that distance() cannot reach (unknown, or no path) plans
+    exactly like no name: no go_to that would fail, no keying at that place."""
+    rng = random.Random(SEED + 3)
+    room_of = make_room_of(ROOMS)
+    full = lambda p: ([(x.source_cmd, x.source_idx, x.action.action) for x in p.actions],  # noqa: E731
+                      [[(x.source_cmd, x.source_idx) for x in fb] for fb in p.fallback])
+    for _ in range(N_RANDOM):
+        commands = build_commands(_random_batch(rng))
+        origin = (rng.uniform(0, 9), rng.uniform(-3, 3)) if rng.random() < 0.7 else None
+        coords = {**COORDS, "blocked": [4, 0]}
+        base = make_distance(coords, [], origin)
+
+        def distance(a, b):
+            return None if "blocked" in (a, b) else base(a, b)
+
+        kw = dict(origin=origin, distance=distance, room_of=room_of)
+        plain = full(merge(commands, **kw))
+        for name in ("nowhere", "blocked"):
+            assert full(merge(commands, origin_name=name, **kw)) == plain, (name, origin)
 
 
 def test_needs_only_point_at_earlier_commands():

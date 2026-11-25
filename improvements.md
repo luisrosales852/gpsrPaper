@@ -1,8 +1,356 @@
 # Improvements to port to the robot (home2)
 
-Changes made in `gpsrPaper/gpsr_merger/merger.py` that are **not yet in
+Changes made in `gpsrPaper/gpsr_merger/` that are **not yet in
 `RoBorregos/home2`** (`task_manager/task_manager/gpsr/merger.py`, branch
 `qwenUpgrade`). Newest first.
+
+---
+
+## 9. Price fixed navigation overhead
+
+`navigation_overhead` implements the paper's fixed navigation cost. It
+adds a distance-equivalent cost to each reachable navigation leg with
+positive length in the command plan. A shared stop costs zero extra.
+The option defaults to zero for the runtime benchmark and paired recovery
+trials. The merger ranks travel through the last task. The executor
+handles the return to the instruction point on the shared deadline.
+
+### How to port it to home2
+
+Port `merger.py` and pass the calibrated `navigation_overhead` in the
+`GPSRTM._execute_interleaved_batch` call to `merge`. Leave the value at
+zero while collecting timings.
+
+Estimate the fixed time spent starting navigation from the robot's logs,
+including dispatch, any motion preparation and any announcement that blocks
+driving. Multiply that time in seconds by the nominal base speed in m/s to
+get the overhead in metres used by the planner. For example, a measured
+4 s at 0.55 m/s gives 2.2 m. The example is a unit conversion. Measure both
+quantities on the live robot, then replay held-out batches with and without
+the calibrated cost.
+
+### Verification
+
+Tests compare the cost against exhaustive feasible schedules for 150
+small batches with asymmetric paths. A separate test shows the overhead
+breaking a travel-distance tie in favor of one visit to a shared stop.
+The three MuJoCo showcases used the same orders at a 2.2 m overhead. Replay
+with `--mode merged --no-video --navigation-overhead 2.2` and compare with
+the default. For the live acceptance check, use the same commands and
+initial pose. Record how many navigation goals started, elapsed time
+through the return, goal completion, and gripper state.
+
+---
+
+## 8. Local recovery and shared deadline
+
+Validated in `gpsrPaper` for the planned RoboCup 2027 port. The snapshot in
+`reference/gpsr_task_manager.py` shows the existing integration point in
+`GPSRTM._execute_interleaved_batch`. Port `recovery.py` with the builder,
+provenance fields in `merger.py`, dispatch changes and timeout constant.
+Use the local `Status` enum and pass the named instruction point to
+`merge(origin_name=...)` with the current pose and Nav2 path lengths.
+
+- **Command context.** At `on_action_start`, set the active source command
+  before dispatch. Store successful facts and target handles by
+  `(source_cmd, source_idx)`. Build speech context from that command's
+  earlier successful results in source order. Keep per-attempt diagnostics
+  distinct from the final exhausted failure and its recovery outcome. Treat
+  `purpose="reacquire"` as a target refresh and `purpose="revisit"` as
+  synthetic navigation. For `purpose="deferred"`, collect the fact silently
+  so the downstream report can speak it once. `report_failure` receives
+  the original action and must select the same command's context.
+- **Gripper.** Wire `gripper_state` to verified empty, occupied, or
+  uncertain readings. Verify acquire and release outcomes physically and
+  preserve ownership across navigation and fallback. A failed pick with
+  verified empty fingers permits other commands' picks. A failed release
+  or ambiguous grasp blocks new picks until verified empty. The adapter
+  must avoid handing over an object to a stale or unverified target.
+- **Live clock.** Pass a monotonic clock and an absolute test deadline via
+  `ExecutionHooks`. Anchor that deadline to the referee's timer and account
+  for any elapsed time before the first tree tick, including command intake
+  and plan announcement. Apply the active deadline inside Nav2, perception,
+  arm, and speech calls and cancel blocking operations at expiry. Use one
+  budget through the return. Wire `return_to_start` to the instruction
+  point and report arrival only after verifying the pose.
+- **Revisit estimates.** Price the route from the current pose through
+  observation and report locations and back to the instruction point.
+  Include reacquisition, skills, speech, and recovery from intermediate
+  stops. Return an unknown estimate when these cannot be bounded. Confirm
+  the target again on the revisit and clear stale locks after failed
+  acquisition.
+- **Acceptance.** Replay the paired three-command cases with live telemetry
+  and check the action starts, reports, gripper state, and return on the
+  test clock. Record plan demonstration only when the operator or referee
+  observes it. Use completed goals and the actual action and trajectory log
+  as evidence for meaningful interleaving, and record official points only
+  from the referee score sheet. The simulator comparison uses the
+  [published 2026.2 rulebook](https://github.com/RoboCupAtHome/RuleBook/releases/tag/2026.2)
+  as its reference for the 420-second fixture and bonus criteria.
+
+---
+
+## 7. Holding penalty (λ) — 2026-11-21
+
+### What changed and why
+
+Interleaving runs other commands' gripper-free segments while one command holds
+an object, so merged plans carry objects further than sequential ones: 8.04 m vs
+6.22 m per batch on 1000 random GPSR-shaped batches (`bench_holding.py`).
+Carrying is where failures cost most (a failure while holding used to lose two
+commands, §6) and where the test deadline matters (an undelivered object earns
+nothing).
+
+`merge(..., holding_penalty=λ)` makes every metre driven while holding cost
+`1 + λ`. That covers the hops between segments and the escort legs inside a
+segment (guiding or following someone while holding, the distance part of the
+paper's ρ). The DP already knows the holder in each state (gripper rule), and
+an escort leg is carried or not depending only on the segment and on whether it
+starts holding, so it stays exact (`test_holding_penalty_is_exact`, brute force
+over every feasible order). λ = 0 is the old objective.
+
+| | travel m | carried m |
+|---|---|---|
+| sequential | 29.08 | 6.22 |
+| λ = 0 | 18.40 | 8.04 |
+| λ = 0.5 | 18.63 | 6.92 |
+| λ = 1 | 18.94 | 6.49 |
+| λ = 2 | 19.13 | 6.36 |
+
+At λ = 1 the merged plan drives 35% less than sequential and carries 4% more
+(29% more at λ = 0). Sequential carries each object straight from pick to
+place, so it is close to the floor; λ = 10 reaches 6.23 m.
+Showcases are unchanged at the default λ = 0 (and `showcase_all_leaves` keeps its
+plan even at λ = 1: the side table is on the cup's way).
+
+Not modelled: κ, τ, and the time part of ρ (dwelling at a segment while
+holding), which needs τ.
+
+### How to port it to home2
+
+File copy. Pass `holding_penalty=` from `GPSRTM._execute_interleaved_batch`
+once a value is chosen; omitting it keeps today's plans.
+
+### Verifying on the robot
+
+`holding_penalty_counts_before_picking` with real places: a fetch whose pick is
+near a gripper-free task off the delivery route. With λ = 0.5 the robot must do
+the other task before picking.
+
+---
+
+## 6. Fallback finishes the held object first — 2026-11-20
+
+### What changed and why
+
+The sequential fallback ran commands in issue order regardless of the gripper.
+Reproduced in the sim: c1 picks the book, c2's `count` fails, the fallback starts
+c0, whose pick fails with the book in hand, then c0's `place_object` puts **the
+book** at the dishwasher and c1's place finds an empty gripper. One perception
+failure cost two manipulation commands and misplaced an object.
+
+Now `SequentialFallbackLeaf` is one leaf for all commands and runs them in
+`fallback_order`: issue order, except the holder runs right before the first
+other command that still has to pick. Commands that do not pick (counting,
+answering) keep their place before it, so conflict order is only broken when the
+single gripper forces it. Without `is_completed` the holder is unknown and the
+order stays issue order.
+
+### How to port it to home2
+
+Copy `leaf_behaviours.py` and `bt_builder.py`. `build_tree`'s signature is
+unchanged; the tree now has one fallback leaf named `fallback` instead of
+`fallback_cmd{i}`. `GPSRTM` already passes `is_completed` (from `_completed`),
+which is what identifies the holder.
+
+### Verifying on the robot
+
+Hardcode a batch where c1 picks and a later gripper-free action of c2 is forced
+to fail (e.g. count a category that is not there). The robot must place c1's
+object before attempting c0's pick.
+
+---
+
+## 5. Named start: drive back before headless actions — 2026-11-20
+
+### What changed and why
+
+Closes the limit in §4. `merge(..., origin_name="start_location")` names the
+robot's start. When a segment of actions before a command's first `go_to` is
+not scheduled first, the plan now contains a `go_to(origin_name)` right before
+it, so `pick cup → go_to A → place → pick book` becomes
+`… → place → go_to start → pick book` (`here_named_start_drives_back_when_forced_late`).
+
+- **Insertion follows the schedule.** `_flatten` adds the `go_to` after the DP,
+  and `_collapse_redundant_go_tos(start=origin_name)` drops it when the robot is
+  already there (first segment, or right after a command's own `go_to(start)`).
+  Travel-only, when the robot's pose is on the named start, the work order and
+  the travel equal those without a name; every inserted `go_to` lands where the
+  robot is not (`test_origin_name_only_adds_the_drive_back`, 300 batches).
+- **Priced as driven.** The DP prices what the plan drives: returning is
+  `distance(place, origin_name)` (the drive's own direction), leaving after a
+  return is `distance(origin_name, ·)`, and leaving before the robot has moved
+  is `distance(None, ·)`, from its own pose, since the inserted `go_to` is
+  dropped then. "Not moved yet" = every finished segment is an at-start one
+  without an escort, a function of the progress vector, so the DP stays exact
+  (it then prices the next step with `seed`, like the first one). Checked against brute force over every feasible order,
+  each scored by the travel its flattened plan drives, with the pose up to
+  1.5 m off the named start and a 15% asymmetric metric
+  (`test_named_start_is_priced_as_driven`): the old pricing (always
+  `distance(None, ·)`) was suboptimal in 28/300 batches (0.77 m mean, 3.25 m
+  max), the new one in 0/300. Nothing changes in the sim, where the pose is on
+  `start_location`; on the robot the TF pose never is, and Nav2 path lengths
+  are not symmetric.
+- **`origin=None` + a name** makes the origin known: `distance(origin_name, ·)`
+  replaces `distance(None, ·)`, so the plan equals the known-origin plan instead
+  of pushing a return to `LARGE_M` (`here_named_start_prices_unknown_origin`).
+- **Unreachable name = no name.** If `distance` cannot price a drive to
+  `origin_name` (`distance(None, origin_name)` with a known pose, or from it to
+  any place in the batch without one), `merge()` ignores it (`_reachable`).
+  Otherwise one typo or a blocked start would put a failing `go_to` in the plan,
+  fail the interleaved branch after its retries, drop the batch to the
+  sequential fallback (which repeats the failing `go_to`), price every trip to
+  the start at `LARGE_M`, and key forced-late headless actions at a place the
+  robot never reaches. Pinned by `here_named_start_unknown_name_falls_back`,
+  `here_named_start_unreachable_falls_back`,
+  `here_named_start_unknown_name_origin_none` and
+  `test_unreachable_origin_name_is_ignored` (300 batches: plan and fallback
+  identical to no name). Silent on purpose: home2 can log by checking the name
+  with `_resolve_xy` before calling `merge()`.
+- **Fallback.** Each headless command's fallback starts with the inserted
+  `go_to`, since the fallback runs after a failure, away from the start.
+  `sim.run_sim.sequential_plan` drops it for the very first command only.
+- **Marker.** Inserted actions have `source_idx == -1` and a
+  `SimpleNamespace(action="go_to", location_to_go=origin_name)` action. At most
+  one per command, so `(source_cmd, source_idx)` stays unique.
+- **Dependencies act at the start.** With `origin_name`, actions before a
+  command's first `go_to` read/write state at that name instead of at the unknown
+  place `None`, which overlaps every place and made them conflict with almost
+  everything. This only removes constraints, so travel never grows. On 300
+  random batches it shortens 34 plans by 7.88 m on average, and the inserted
+  drive-backs drop from 39 to 5: most "forced late" headless segments were
+  spurious conflicts (`dep_here_unknown_place_conflicts_with_everything` vs
+  `dep_here_named_start_drops_spurious_conflict`). A real conflict at the start
+  still holds (`here_named_start_no_double_go_to`). Without `origin_name`
+  nothing changes.
+
+Sim showcases are unchanged (their headless segment already runs first).
+
+### How to port it to home2
+
+File copy, then pass `origin_name=<instruction-point name>` from
+`GPSRTM._execute_interleaved_batch`. Check: (1) `_path_cost` / `_resolve_xy`
+resolve that name; (2) the `go_to` handler accepts a `SimpleNamespace` with
+`action`/`location_to_go` (it reads them by attribute); (3) `_completed` keys
+`(cmd, -1)` are harmless.
+
+### Verifying on the robot
+
+Hardcode `here_named_start_drives_back_when_forced_late` with real places: the
+robot must drive back to the instruction point before the second pick.
+
+---
+
+## 4. Commands with no leading `go_to` run at the origin — 2026-11-16
+
+### What changed and why
+
+"Tell me a joke, then go to the kitchen and count the cups" parses to a command
+whose first action is not a `go_to`. That action happens where the robot stands
+when the batch is given. The merger used to give that segment `location=None`,
+i.e. an unknown place costing `LARGE_M` (1000 m) in and out, so its position in
+the plan was arbitrary.
+
+Now `_decompose` marks it `at_origin`, and `_cost_matrix` prices it:
+
+| hop | origin known | `origin=None` |
+|---|---|---|
+| start → it | 0 | 0 |
+| it → next place | `distance(None, place)` | 0 (same as the no-origin seed) |
+| a place → it | `distance(None, place)` | `LARGE_M` |
+
+A `go_to` whose name does not resolve is still unknown (`LARGE_M`).
+
+**Limit (fixed in §5 with `origin_name`).** This is pricing only. The plan has no action
+that drives the robot back to the origin, because the parser gave none and the
+origin has no name. The DP runs these segments first when it can. It cannot when
+the gripper or a dependency forces them later
+(`here_forced_late_by_gripper`), and it may choose not to when the segment ends
+with an escort (`here_escort_can_run_late_without_drive_back`). In both cases
+the action runs wherever the robot is, as it already does in sequential order.
+Fixing it needs a named start location the merger could insert a `go_to` for.
+
+### How to port it to home2
+
+File copy; `merge()`'s signature is unchanged. Nothing to wire.
+
+### Verifying on the robot
+
+Hardcode a batch whose second command starts with `answer_question` and whose
+first command starts with a far `go_to`. The answer must be given before the
+robot drives anywhere.
+
+---
+
+## 3. Exit locations for guide/follow — 2026-11-16
+
+### What changed and why
+
+"Go to the couch, guide Jane to the kitchen" leaves the robot in the kitchen.
+The merger priced the next hop from the couch. Now a segment containing
+`guide_person_to` (`destination_room`) or `follow_person_until` (`destination`)
+has an `exit`, and `_cost_matrix` uses `edge = distance(exit(previous),
+entry(next))`. The DP is untouched: the robot's position is still a function of
+the last segment, so it stays exact (checked against the Held-Karp oracle on
+400 random batches that now include escorts and headless commands).
+
+- A follow with **no destination** keeps `exit = entry`. Its end point is
+  unknown, and pricing it as `LARGE_M` would push every such follow to the end.
+- **Collapse bug fixed.** `_collapse_redundant_go_tos` only tracked `go_to`
+  targets, so `go_to A, guide to B, go_to A` dropped the second `go_to A` and
+  the robot did A's work in B. An escort now resets the tracked location, so the
+  next `go_to` is always kept (also right after an escort to that same place:
+  a follow stops behind the person, not on the spot). Pinned by
+  `exit_keeps_go_to_after_escort`; `shared_start_first_command_goto_protected`
+  had pinned the bug (count at `chairs` executed in the bathroom) and now
+  expects two visits.
+
+### Measured
+
+300 random GPSR-shaped batches (`tests/test_dependencies.py` generator), same
+gripper and dependency rules, travel measured with exits:
+
+| | old pricing | exits + origin |
+|---|---|---|
+| mean travel saved vs sequential | 7.44 m | 8.77 m |
+| batches where the merged plan is *worse* than sequential | 19 | 0 |
+
+The plan changes in 107 of the 223 batches that contain an escort or a
+headless command, saving 3.73 m on average (max 16.3 m) in those.
+
+Simulation (collision-free path length, `--no-video`):
+
+| scenario | merged before | merged now | sequential |
+|---|---|---|---|
+| `showcase_all_leaves` | 38.24 m / 136.3 s | 35.49 m / 132.6 s | 41.38 m / 142.7 s |
+| `showcase_merge` (no escort) | 35.38 m / 119.1 s | unchanged | 58.37 m / 161.6 s |
+| `showcase_exits` (new) | order priced the old way: 37.3 m planned | 37.52 m / 113.8 s (19.9 m planned) | 39.85 m / 117.1 s (21.6 m planned) |
+
+`cost_model_gap_m` is now the in-segment displacement (the escort itself and
+the pick stand-off) to within one `FOLLOW_GAP`
+(`test_exit_locations_are_priced`).
+
+### How to port it to home2
+
+File copy; `merge()`'s signature is unchanged. The destination names go through
+the same `locator` / `distance` as `go_to` targets, so `_resolve_xy` must
+resolve room names such as "kitchen" (it already does for `go_to`).
+
+### Verifying on the robot
+
+Hardcode `exit_guide_prices_next_hop_from_destination` with real locations: a
+guide from A to a far room B, one command near B and one near A. The plan must
+do the command near A first, then the guide, then the command near B.
 
 ---
 
@@ -38,7 +386,7 @@ real conflict (which would cost a wrong answer).
 |---|---|---|
 | `pick_object` | objects | objects |
 | `place_object` | — | objects |
-| `give_object` | people | — |
+| `give_object` | people | objects (the handed object is now at this place) |
 | `count` | objects, people | — |
 | `get_visual_info` | objects | — |
 | `find_person`, `find_person_by_name`, `get_person_info` | people | — |
@@ -64,9 +412,10 @@ stays exact. Constraints only point at earlier-issued commands, so sequential
 order always satisfies them, and the DP can never get stuck because of them.
 
 **Measured** on 300 random GPSR-shaped batches (`tests/test_dependencies.py`):
-185 contain a cross-command conflict, and **travel-only planning breaks conflict
-order in 111 of them**. Enforcing dependencies costs **1.24 m** extra travel on
-average. Both sim showcases have no shared places, so their plans are unchanged
+174 contain a cross-command conflict, and **travel-only planning breaks conflict
+order in 112 of them**. Enforcing dependencies costs **2.25 m** extra travel on
+average (numbers re-measured 2026-11-16 with exit locations and headless
+commands in the generator; before that: 185 / 111 / 1.24 m). Both sim showcases have no shared places, so their plans are unchanged
 (35.38 m vs 58.37 m).
 
 ### API
@@ -111,7 +460,7 @@ plans change once this is ported**, but only for batches with a real conflict.
 
 1. Before deploying, in gpsrPaper:
    ```bash
-   python3 run_scenarios.py               # 40/40, includes the 10 dep_* scenarios
+   python3 run_scenarios.py               # 62/62, includes the 13 dep_* scenarios
    python3 -m tests.test_dependencies     # invariants + oracle under dependencies
    python3 -m tests.test_progress_dp
    ```

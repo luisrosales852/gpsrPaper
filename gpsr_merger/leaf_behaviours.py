@@ -5,11 +5,8 @@ Each leaf calls the method that matches its action's ``.action`` field
 ``subtask_handlers`` that defines it — the same dispatch model used by
 ``gpsr_task_manager.search_command``.
 
-The leaves are synchronous: ``update()`` blocks for the duration of the
-underlying subtask call, then returns SUCCESS/FAILURE. py_trees Timeout
-decorators only check between ticks, so the *primary* timeout enforcement
-lives inside the subtask managers themselves; the decorators are a
-between-tick safety net.
+The calls are synchronous. Subtask managers enforce the deadlines supplied
+by the executor while the underlying subtask call is active.
 """
 
 from typing import Any, Callable, List, Optional, Sequence, Tuple
@@ -52,14 +49,16 @@ def _unpack_outcome(outcome: Any) -> Tuple[Optional[Status], Any]:
 
 def _dispatch(
     plan_action: PlanAction,
-    method: Callable,
+    method: Optional[Callable],
     on_complete: Optional[Callable[[PlanAction, Any, Any], None]],
     logger: Any,
     on_start: Optional[Callable[[PlanAction], None]] = None,
-) -> Optional[Status]:
+    is_late: Optional[Callable[[], bool]] = None,
+    verify_success: Optional[Callable[[], bool]] = None,
+) -> Status:
     """Call ``method(plan_action.action)``, fire ``on_complete``, return Status.
 
-    Returns ``None`` if the handler raised or returned a non-Status value.
+    Converts missing handlers, exceptions and invalid outcomes into failures.
     """
     if on_start is not None:
         try:
@@ -69,14 +68,24 @@ def _dispatch(
 
     action = plan_action.action
     kind = getattr(action, "action", "")
-    try:
-        outcome = method(action)
-    except Exception:  # noqa: BLE001 — we want the BT to handle it
-        logger.error(f"{kind} raised")
-        return None
-    status, result = _unpack_outcome(outcome)
-    if status is None:
-        logger.warning(f"{kind} returned non-Status outcome {outcome!r}; treating as failure")
+    status, result = Status.EXECUTION_ERROR, None
+    if method is None:
+        logger.error(f"No handler for action '{kind}'")
+    else:
+        try:
+            outcome = method(action)
+        except Exception:  # noqa: BLE001 — we want the BT to handle it
+            logger.error(f"{kind} raised")
+        else:
+            parsed_status, result = _unpack_outcome(outcome)
+            if parsed_status is None:
+                logger.warning(f"{kind} returned non-Status outcome; treating as failure")
+            else:
+                status = parsed_status
+    if is_late is not None and is_late():
+        status, result = Status.TIMEOUT, None
+    elif status == Status.EXECUTION_SUCCESS and verify_success is not None and not verify_success():
+        status, result = Status.EXECUTION_ERROR, None
     if on_complete is not None:
         try:
             on_complete(plan_action, status, result)
@@ -123,97 +132,108 @@ class ActionLeaf(py_trees.behaviour.Behaviour):
         return py_trees.common.Status.FAILURE
 
 
-class SequentialFallbackLeaf(py_trees.behaviour.Behaviour):
-    """Leaf that runs a single command's fallback sequence to completion.
+def fallback_order(
+    fallback: Sequence[Sequence[PlanAction]],
+    is_completed: Optional[Callable[[PlanAction], bool]],
+    *,
+    holder: Optional[int] = None,
+) -> List[int]:
+    """Issue order, except the command holding an object runs right before the
+    first other command that still has to pick (one gripper)."""
+    order = list(range(len(fallback)))
+    if is_completed is None:
+        return order
+    if holder is None:
+        for c, actions in enumerate(fallback):
+            held = False
+            for pa in actions:
+                if pa.requires_gripper and is_completed(pa):
+                    held = True
+                if pa.releases_gripper and is_completed(pa):
+                    held = False
+            if held:
+                holder = c
+    if holder is None:
+        return order
+    pickers = [c for c in order if c != holder
+               and any(pa.requires_gripper and not is_completed(pa) for pa in fallback[c])]
+    if pickers and pickers[0] < holder:
+        order.remove(holder)
+        order.insert(order.index(pickers[0]), holder)
+    return order
 
-    Used inside the sequential-fallback branch when interleaving fails.
-    Each leaf executes one source command's actions in original order,
-    ignoring within-command failures (they are logged) so that subsequent
-    commands still get a chance to run.
+
+def _resume_skip_mask(
+    actions: Sequence[PlanAction],
+    is_completed: Optional[Callable[[PlanAction], bool]],
+) -> List[bool]:
+    """Which actions of one command to skip when resuming.
+
+    A non-``go_to`` the interleaved branch already finished is skipped, and a
+    ``go_to`` is skipped when every action up to the next ``go_to`` is.
     """
+    def is_go_to(pa: PlanAction) -> bool:
+        return getattr(pa.action, "action", "") == "go_to"
+
+    skip = [not is_go_to(pa) and is_completed is not None and is_completed(pa) for pa in actions]
+    for i, pa in enumerate(actions):
+        if not is_go_to(pa):
+            continue
+        pending = False
+        for later in range(i + 1, len(actions)):
+            if is_go_to(actions[later]):
+                break
+            if not skip[later]:
+                pending = True
+                break
+        skip[i] = not pending
+    return skip
+
+
+class SequentialFallbackLeaf(py_trees.behaviour.Behaviour):
+    """Runs every command's fallback sequence, one command after another, in
+    ``fallback_order``. Failures are logged, not propagated, so every command
+    gets its chance; always returns SUCCESS."""
 
     def __init__(
         self,
-        per_command_actions: Sequence[PlanAction],
+        fallback: Sequence[Sequence[PlanAction]],
         subtask_handlers: Sequence[Any],
         on_complete: Optional[Callable[[PlanAction, Any, Any], None]] = None,
-        name: Optional[str] = None,
+        name: str = "fallback",
         is_completed: Optional[Callable[[PlanAction], bool]] = None,
         on_start: Optional[Callable[[PlanAction], None]] = None,
     ):
-        if not per_command_actions:
-            raise ValueError("SequentialFallbackLeaf requires at least one action")
-        super().__init__(name=name or f"fallback_cmd#{per_command_actions[0].source_cmd}")
+        super().__init__(name=name)
+        self._fallback = fallback
         self._handlers = subtask_handlers
         self._on_complete = on_complete
         self._is_completed = is_completed
         self._on_start = on_start
-        # Resolve handlers once so a missing-method misconfiguration
-        # surfaces here, in tree construction, rather than mid-tick.
-        self._resolved: List[Tuple[PlanAction, Optional[Callable]]] = [
-            (pa, _resolve_method(getattr(pa.action, "action", ""), subtask_handlers))
-            for pa in per_command_actions
+        # Resolved now so a missing handler shows up at tree construction.
+        self._methods = [
+            [_resolve_method(getattr(pa.action, "action", ""), subtask_handlers) for pa in actions]
+            for actions in fallback
         ]
-        self._started = False
-
-    def _resume_skip_mask(self) -> List[bool]:
-        """Compute which resolved actions to skip when resuming.
-
-        Two rules, both no-ops when ``is_completed`` is ``None``:
-
-        * A non-``go_to`` action the interleaved branch already finished is
-          skipped (avoids redoing work, e.g. a double pick).
-        * A ``go_to`` is skipped when every non-``go_to`` action in its segment
-          (the run of actions up to the next ``go_to`` or end of command) is
-          already done — otherwise the robot would drive to a location with no
-          work left to perform. A ``go_to`` is kept whenever any pending work
-          remains in its segment, so the robot still re-establishes position
-          before resuming.
-        """
-        n = len(self._resolved)
-        completed = [
-            getattr(pa.action, "action", "") != "go_to"
-            and self._is_completed is not None
-            and self._is_completed(pa)
-            for pa, _ in self._resolved
-        ]
-        skip = list(completed)
-        for i in range(n):
-            if getattr(self._resolved[i][0].action, "action", "") != "go_to":
-                continue
-            has_pending_work = False
-            for j in range(i + 1, n):
-                if getattr(self._resolved[j][0].action, "action", "") == "go_to":
-                    break
-                if not skip[j]:
-                    has_pending_work = True
-                    break
-            if not has_pending_work:
-                skip[i] = True
-        return skip
 
     def update(self) -> py_trees.common.Status:
-        if not self._started:
-            self._started = True
-            if self._resolved:
-                cmd_idx = self._resolved[0][0].source_cmd
-                self.logger.info(
-                    f"fallback running cmd_idx={cmd_idx}, " f"{len(self._resolved)} actions"
-                )
-        skip = self._resume_skip_mask()
-        for idx, (pa, method) in enumerate(self._resolved):
-            kind = getattr(pa.action, "action", "")
-            if skip[idx]:
-                self.logger.info(f"resume: skipping {kind} cmd={pa.source_cmd} idx={pa.source_idx}")
+        for c in fallback_order(self._fallback, self._is_completed):
+            actions = self._fallback[c]
+            if not actions:
                 continue
-            if method is None:
-                self.logger.error(
-                    f"No handler for action '{kind}' in [{_handler_names(self._handlers)}]"
-                )
-                continue
-            _dispatch(pa, method, self._on_complete, self.logger, on_start=self._on_start)
-        # The fallback branch always reports SUCCESS — its job is to give
-        # every command its chance, not to gate on per-action outcomes.
+            self.logger.info(f"fallback running cmd_idx={c}, {len(actions)} actions")
+            skip = _resume_skip_mask(actions, self._is_completed)
+            for pa, method, skipped in zip(actions, self._methods[c], skip):
+                kind = getattr(pa.action, "action", "")
+                if skipped:
+                    self.logger.info(f"resume: skipping {kind} cmd={pa.source_cmd} idx={pa.source_idx}")
+                    continue
+                if method is None:
+                    self.logger.error(
+                        f"No handler for action '{kind}' in [{_handler_names(self._handlers)}]"
+                    )
+                    continue
+                _dispatch(pa, method, self._on_complete, self.logger, on_start=self._on_start)
         return py_trees.common.Status.SUCCESS
 
 

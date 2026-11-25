@@ -1,7 +1,7 @@
 # Possible improvements — what `main.tex` claims that the code doesn't do yet
 
 Audit of the paper draft against the code, 2026-11-11. Done items move to
-`improvements.md`, which is the list of changes to port to home2.
+`improvements.md`, which is the list of changes to port to home2. Open items are now tracked in `futureWork.md`.
 
 Status: ✅ done · 🚧 in progress · ⬜ not started
 
@@ -9,9 +9,9 @@ Status: ✅ done · 🚧 in progress · ⬜ not started
 |---|---|---|---|---|
 | 0 | ✅ Progress-vector DP | §Method, Alg. 1 | `merger.py` | done |
 | 1 | ✅ Cross-command dependencies (read/write sets) | §Interference, Table I, abstract | `merger.py` | small |
-| 2 | ⬜ Exit locations for guide/follow | §Commands and segments | `merger.py` | small |
-| 3 | ⬜ Commands with no leading `go_to` | §Commands and segments | `merger.py` | small |
-| 4 | ⬜ Full step cost g(x, h, s): κ, λ, time | §Objective | `merger.py` | small |
+| 2 | ✅ Exit locations for guide/follow | §Commands and segments | `merger.py` | done |
+| 3 | ✅ Commands with no leading `go_to` (+ named start, improvements.md §5) | §Commands and segments | `merger.py` | done |
+| 4 | 🚧 Step cost g(x, h, s): λ and ρ's distance part done (`holding_penalty`); κ, τ not | §Objective | `merger.py` | small |
 | 5 | ⬜ Greedy baseline (and better fallback above the cap) | §Baselines | `merger.py` | small |
 | 6 | ⬜ Replanning after a failure | §Execution and replanning, title | `merger.py` + `bt_builder.py` + `leaf_behaviours.py` | medium |
 | 7 | ⬜ Interleaving-bonus bit, 420 s time limit | §Objectives that are not additive | `merger.py` | medium |
@@ -19,8 +19,8 @@ Status: ✅ done · 🚧 in progress · ⬜ not started
 | 9 | ⬜ GPSR-Sim benchmark | §GPSR-Sim | `sim/` + generator | large |
 | 10 | ⬜ PDDL and LLM-merge baselines | §Baselines | new | medium–large |
 | 11 | ⬜ Non-blocking leaves (`RUNNING`) | §Execution | robot only | medium |
-| 12 | ⬜ Planner runtime table from a committed script | §Planner runtime | `tests/` or `bench/` | tiny |
-| 13 | ⬜ Per-command result registers in the sim | §Interference (register_c) | `sim/handlers.py` | tiny |
+| 12 | ✅ Planner runtime table from a committed script | §Planner runtime | `bench_runtime.py` | done |
+| 13 | ✅ Per-command result registers in the sim (robot still shared) | §Interference (register_c) | `sim/handlers.py` | done |
 
 ---
 
@@ -43,7 +43,7 @@ the commands one by one** (conflict serializability, as in databases). Every
 answer and every world effect is the same as in the sequential baseline; only
 travel changes.
 
-## 2. Exit locations
+## 2. Exit locations ✅ (see improvements.md §3)
 
 The paper says a segment containing `guide_person_to` (`destination_room`) or
 `follow_person_until` (`destination`) *ends* at that destination. The merger
@@ -51,7 +51,12 @@ assumes the robot ends at the segment's `go_to` target. Fix: give `_Segment`
 an `exit`, and use `edge[exit(here)][entry(u)]`. This closes part of the
 `cost_model_gap_m` the sim measures.
 
-## 3. Commands with no leading `go_to`
+## 3. Commands with no leading `go_to` ✅ (see improvements.md §4)
+
+Done as pricing only. **Paper fix:** "attached to the robot's position when the
+command was given" is a cost, not a guarantee. When such a segment cannot run
+first, nothing drives the robot back. Either say so in §Commands and segments,
+or give the start a name so the planner can insert a `go_to`.
 
 The paper says leading actions attach to the robot's current position. The
 code makes them a segment with `location=None`, which costs `LARGE_M`, so
@@ -110,12 +115,25 @@ PDDL needs a domain file; LLM merge needs a fixed model and prompt.
 
 Robot side only; the sim doesn't need it.
 
-## 12. Runtime table
+## 12. Runtime table ✅
 
-The benchmark used for `improvements.md` already produces the numbers; it
-should become a committed script so the table can be regenerated.
+`python3 bench_runtime.py [--latex]`. Times the DP alone (no dependencies) and
+marks rows above `_STATE_CAP`, where `merge()` returns issue order instead.
+The old prototype row M=32, n=8 is such a row.
 
-## 13. Per-command result registers in the sim
+## 13. Per-command result registers in the sim ✅
+
+Done 2026-11-20: `SimSubtaskHandler.results[cmd]` holds each command's
+non-`go_to` results; pinned by `test_answers_only_use_their_own_command_results`.
+Before the fix the demo itself leaked: in `showcase_merge` c3 answered "the
+biggest fruit on the side table: Maria" (c2's `get_person_info`).
+
+**Robot: still shared.** `GPSRTM._on_action_complete` calls
+`hri.add_command_history(plan_action.action, result, status)` without
+`source_cmd`, so home2 keeps one history for all commands. Needs a fix in home2
+(pass `source_cmd`, filter by it in `say_with_context`).
+
+Original note:
 
 `sim/handlers.py:379`: when `previous_command_info` is empty,
 `say_with_context` falls back to `self.last_results[-2:]`, a buffer shared by

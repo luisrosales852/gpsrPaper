@@ -1,20 +1,9 @@
 """``SimSubtaskHandler`` — the simulated GPSR subtask manager.
 
-This is the whole integration surface. ``leaf_behaviours._resolve_method`` looks
-up a method whose *name* equals the action kind and calls it with the BAML
-command object, expecting ``(Status, result)`` back — so implementing the 13
-kinds below is sufficient to drive the real behaviour tree. No subclassing, no
-registration, no patching of ``gpsr_merger``.
-
-Two properties make the run evidence rather than decoration:
-
-* **The gripper is enforced here, in the executor, not only in the tests.**
-  ``pick_object`` hard-fails when something is already held, so a schedule that
-  violated the single-item invariant would visibly break the run. That is an
-  execution-level witness for ``tests._merger_helpers.gripper_invariant_holds``.
-* **Timeouts are enforced in sim-time by the handler**, via ``robot.deadline``
-  and ``timeouts.timeout_for`` — mirroring the real subtask managers rather than
-  relying on py_trees' between-tick ``Timeout`` decorator.
+The executor calls skills by action kind and expects ``(Status, result)``.
+The adapter also exposes the verified gripper state, return and reporting
+operations, and cost estimates for deferral. Robot steps enforce
+``robot.deadline`` inside the blocking skill and return calls.
 
 Every movement is planned by ``sim.routing`` (the stand-in for Nav2): paths go
 around furniture and around people other than the one being escorted.
@@ -23,9 +12,10 @@ around furniture and around people other than the one being escorted.
 import math
 from typing import Any, Dict, List, Optional, Tuple
 
+from gpsr_merger.recovery import GripperState
 from gpsr_merger.status import Status
 from gpsr_merger.timeouts import timeout_for
-from sim.robot import SimRobot, SimTimeout
+from sim.robot import ANG_SPEED, DT, EPS_M, LIN_SPEED, SimRobot, SimTimeout, wrap
 from sim.routing import Router, VisGraphRouter, path_length
 from sim.world import SimObject, SimPerson, World
 
@@ -33,6 +23,7 @@ SENSE_RADIUS = 3.2      # m — perception range for find/count/visual-info
 REACH_RADIUS = 2.4      # m — the robot must be at the object's location to pick
 HANDOVER_RADIUS = 2.6   # m — a person must be close to receive an object
 PICK_STANDOFF = 0.55    # m — how close the base gets to an object it picks
+FAILURE_REPORT_S = 2.6
 
 # Sim-seconds each non-navigation leaf takes. Chosen under the corresponding
 # budgets in gpsr_merger/timeouts.py so a nominal run never trips a timeout.
@@ -66,7 +57,7 @@ class SimSubtaskHandler:
         self.failures = dict(failures or {})
         self.current = None              # PlanAction, set by on_action_start
         self.locked: Dict[int, SimPerson] = {}   # per source command
-        self.last_results: List[str] = []
+        self.results: Dict[int, Dict[int, str]] = {}
 
     # ---- wiring from bt_builder hooks ------------------------------------
 
@@ -86,6 +77,88 @@ class SimSubtaskHandler:
         if self.recorder is not None:
             self.recorder.action_end(plan_action, status, result, self.robot)
 
+    def gripper_state(self) -> GripperState:
+        return GripperState.EMPTY if self.robot.held is None else GripperState.OCCUPIED
+
+    def set_action_deadline(self, deadline: Optional[float]) -> None:
+        self.robot.deadline = deadline
+
+    def _travel_time(self, start, goal, yaw, goal_yaw):
+        path = self._path(start, goal)
+        if path is None or World.distance(path[-1] if path else start, goal) > EPS_M:
+            return None
+        # Round each motion to simulation ticks. A skill may leave an unknown yaw.
+        elapsed = 0.0
+        for point in path:
+            distance = World.distance(start, point)
+            if distance > EPS_M:
+                heading = math.atan2(point[1] - start[1], point[0] - start[0])
+                angle = math.pi if yaw is None else abs(wrap(heading - yaw))
+                elapsed += (math.ceil(angle / (ANG_SPEED * DT))
+                            + math.ceil(distance / (LIN_SPEED * DT))) * DT
+                yaw = heading
+            start = point
+        angle = math.pi if yaw is None else abs(wrap(goal_yaw - yaw))
+        return elapsed + (math.ceil(angle / (ANG_SPEED * DT)) + 1) * DT
+
+    def estimate_deferred(self, steps, home) -> Optional[float]:
+        """Price the revisit and reserve a route home even if a skill fails."""
+        xy, yaw = self.robot.xy, self.robot.yaw
+        elapsed, estimate = 0.0, 0.0
+        for pa in [*steps, None]:
+            home_time = self._travel_time(xy, home[:2], yaw, home[2])
+            if home_time is None:
+                return None
+            estimate = max(estimate, elapsed + home_time)
+            if pa is None:
+                break
+            kind = pa.action.action
+            if kind == "go_to":
+                pose = self.world.pose(pa.action.location_to_go)
+                travel = None if pose is None else self._travel_time(xy, pose[:2], yaw, pose[2])
+                if travel is None or travel > timeout_for(kind):
+                    return None
+                elapsed += max(travel, 0.6)  # includes the cost of an injected failure
+                xy, yaw = pose[:2], pose[2]
+            else:
+                elapsed += {
+                    "count": 2 * DURATION["count"] + DT,
+                    "get_visual_info": 2 * DURATION["get_visual_info"] + DT,
+                    "find_person": DURATION["find_person"] + 1.4 + math.pi / ANG_SPEED + DT,
+                    "find_person_by_name": DURATION["find_person_by_name"] + 1.4 + math.pi / ANG_SPEED + DT,
+                    "get_person_info": DURATION["get_person_info"] + math.pi / ANG_SPEED + DT,
+                    "say_with_context": DURATION["say_with_context"],
+                }[kind]
+                yaw = None
+        return estimate
+
+    def return_to_start(self, home, deadline: float) -> bool:
+        self.robot.deadline = deadline
+        try:
+            path = self._path(self.robot.xy, home[:2])
+            if path is None:
+                return False
+            self.robot.drive_path(path, yaw=home[2])
+            return World.distance(self.robot.xy, home[:2]) <= EPS_M
+        except SimTimeout:
+            return False
+        finally:
+            self.robot.deadline = None
+
+    def report_failure(self, plan_action, status: Status, deadline: float) -> bool:
+        self.current = plan_action
+        self.robot.deadline = deadline
+        try:
+            text = f"Command {self.cmd_idx + 1}: could not complete {plan_action.action.action}."
+            self._say(text, anchor="robot", hold=FAILURE_REPORT_S)
+            if self.recorder is not None:
+                self.recorder.failure_report(plan_action, status, text, self.robot)
+            return True
+        except SimTimeout:
+            return False
+        finally:
+            self.robot.deadline = None
+
     # ---- internals -------------------------------------------------------
 
     @property
@@ -95,8 +168,7 @@ class SimSubtaskHandler:
     def _injected(self, kind: str) -> Optional[Status]:
         """Pop a scripted failure for this action, if one is queued.
 
-        Keys are ``"<cmd>.<idx>"`` (precise) or a bare action kind (every
-        occurrence). Used to exercise Retry -> Selector -> sequential_fallback.
+        Keys are ``"<cmd>.<idx>"`` (precise) or a bare action kind.
         """
         for key in (f"{getattr(self.current, 'source_cmd', -1)}."
                     f"{getattr(self.current, 'source_idx', -1)}", kind):
@@ -106,12 +178,18 @@ class SimSubtaskHandler:
         return None
 
     def _begin(self, kind: str):
-        self.robot.deadline = self.robot.t + timeout_for(kind)
+        skill_deadline = self.robot.t + timeout_for(kind)
+        if self.robot.deadline is not None:
+            skill_deadline = min(skill_deadline, self.robot.deadline)
+        self.robot.deadline = skill_deadline
 
     def _end(self, status: Status, result=None) -> Tuple[Status, Any]:
         self.robot.deadline = None
-        if status == Status.EXECUTION_SUCCESS and result is not None:
-            self.last_results.append(str(result))
+        kind = getattr(getattr(self.current, "action", None), "action", "")
+        if (status == Status.EXECUTION_SUCCESS and result is not None
+                and getattr(self.current, "purpose", None) != "reacquire"
+                and kind not in ("go_to", "say_with_context")):
+            self.results.setdefault(self.cmd_idx, {})[self.current.source_idx] = str(result)
         return (status, result)
 
     def _near(self, xy, radius: float) -> bool:
@@ -146,8 +224,9 @@ class SimSubtaskHandler:
         return self.router.plan_path(start, goal)
 
     def _say(self, text: str, anchor: Optional[str] = None, hold: float = 2.2) -> None:
-        self.robot.speech = text
-        self.robot.speech_anchor = anchor
+        if getattr(self.current, "purpose", None) not in ("reacquire", "deferred"):
+            self.robot.speech = text
+            self.robot.speech_anchor = anchor
         self.robot.idle(hold)
 
     # ---- guard shared by all 13 leaves -----------------------------------
@@ -376,7 +455,11 @@ class SimSubtaskHandler:
     def say_with_context(self, command) -> Tuple[Status, Any]:
         def body():
             instruction = str(_f(command, "user_instruction", ""))
-            prior = _f(command, "previous_command_info", []) or self.last_results[-2:]
+            history = self.results.get(self.cmd_idx, {})
+            prior = [result for idx, result in sorted(history.items())
+                     if self.current is None or idx < self.current.source_idx]
+            if not prior:
+                prior = _f(command, "previous_command_info", [])
             ctx = "; ".join(str(p) for p in prior if p)
             text = f"About {instruction}: {ctx}" if ctx else f"About {instruction}."
             self._say(text, anchor="robot", hold=DURATION["say_with_context"])

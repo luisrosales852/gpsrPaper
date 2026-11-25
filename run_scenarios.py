@@ -36,7 +36,8 @@ def main() -> int:
         try:
             plan = merge(commands, **kwargs)
             ok, failures = evaluate_expectations(
-                plan, commands, sc.get("expect", {}), kwargs.get("room_of")
+                plan, commands, sc.get("expect", {}), kwargs.get("room_of"),
+                kwargs.get("origin_name"),
             )
         except Exception as e:  # noqa: BLE001
             ok, failures = False, [f"EXCEPTION: {e}"]

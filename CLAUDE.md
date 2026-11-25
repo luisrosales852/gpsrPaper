@@ -30,7 +30,7 @@ Corollaries:
 ## Commands
 
 ```bash
-python3 run_scenarios.py          # merger smoke test — expect 40/40
+python3 run_scenarios.py          # merger smoke test — expect 62/62
 python3 run_scenarios.py -v       # also print the merged ordering per scenario
 
 # Simulation (needs the venv; Python 3.14)
@@ -41,9 +41,11 @@ python3.14 -m venv .venv
 .venv/bin/python -m sim.run_sim --mode both --no-video    # event log only, ~0.1 s
 .venv/bin/python -m sim.run_sim --mode both               # -> out/side_by_side.{mp4,png}, ~1 min
 .venv/bin/python -m sim.run_sim --scenario showcase_all_leaves   # 13-leaf coverage run
-.venv/bin/pytest tests/test_sim_run.py -q                 # 12 tests, headless, <1 s
-python3 -m tests.test_progress_dp                         # DP vs Held-Karp oracle, no venv
+.venv/bin/pytest tests/test_sim_run.py -q                 # 17 tests, headless, <1 s
+python3 -m tests.test_progress_dp                         # DP vs Held-Karp + named-start brute force, no venv
 python3 -m tests.test_dependencies                        # conflict order + oracle under deps, no venv
+python3 bench_runtime.py [--latex]                         # paper's planner-runtime table, no venv
+python3 bench_holding.py [--latex]                         # travel vs distance carried per lambda, no venv
 .venv/bin/python -m tests.test_sim_run                    # same checks without pytest
 ```
 
@@ -53,8 +55,8 @@ python3 -m tests.test_dependencies                        # conflict order + ora
   every iteration loop should use.
 - Always run from the repo root (`-m sim.run_sim`, not `python sim/run_sim.py`);
   the entry scripts do `sys.path.insert` of the repo root themselves.
-- Useful flags: `--fail pick_object:1` or `--fail 0.1:2` (`cmd.idx:count`) to
-  inject failures and exercise Retry → Selector → `sequential_fallback`;
+- Useful flags: `--holding-penalty 1` (λ, default 0); `--fail pick_object:1` or `--fail 0.1:2` (`cmd.idx:count`) to
+  inject failures and exercise one of the three recovery policies;
   `--print-tree`; `--scenario <name>`; `--camera iso`.
 - Defaults are tuned for the 1080p race video: `--width 832 --height 720` matches
   the apartment's aspect (no grey side bars), `--speed 3.0`. Both modes must share
@@ -67,11 +69,11 @@ gpsr_merger/           THE CONTRIBUTION — no third-party deps except py_trees 
   merger.py            interleaving planner; merge() -> InterleavedPlan
   bt_builder.py        build_tree() -> py_trees root Selector
   leaf_behaviours.py   ActionLeaf, SequentialFallbackLeaf, OneShotCallbackLeaf
-  timeouts.py          per-action budgets + GLOBAL_BUDGET_S (300 s)
+  timeouts.py          per-action budgets + GLOBAL_BUDGET_S (420 s)
   status.py            vendored 11-line Status enum
-scenarios/merger.json  40 declarative scheduler scenarios (commands + coords + expect)
+scenarios/merger.json  62 declarative scheduler scenarios (commands + coords + expect)
 tests/_merger_helpers.py  invariant checkers, BAML stand-in builder, expect-evaluator
-tests/test_sim_run.py     12 tests on real headless sim runs (incl. collision checks)
+tests/test_sim_run.py     17 tests on real headless sim runs (incl. collision checks)
 tests/test_progress_dp.py differential test: progress-vector DP vs tests/_heldkarp_oracle.py
 tests/test_dependencies.py cross-command dependencies on random GPSR-shaped batches
 sim/                   MuJoCo apartment; consumer of the contribution
@@ -108,6 +110,27 @@ Things that will bite you:
 - **`origin=None` is meaningful**, not a lazy default: it seeds the DP with no
   origin edge, avoiding a bias toward the SLAM map origin when the real pose is
   unknown. Scenarios cover both.
+- **Entry vs exit.** A segment enters at its `go_to` target and exits there too,
+  unless it contains a `guide_person_to` / `follow_person_until` with a
+  destination: then `_Segment.exit` is that destination and the next hop is
+  priced from it (`exit_*` scenarios). An escort also stops
+  `_collapse_redundant_go_tos` from dropping the next `go_to`.
+- **`at_origin` segments.** Actions before a command's first `go_to` run at the
+  robot's start: free when first, priced with `distance(None, place)` otherwise
+  (`LARGE_M` to return when `origin=None`). Without `origin_name` that is
+  pricing only. With `merge(origin_name=...)` a `go_to(origin_name)` is inserted
+  before such a segment (`PlanAction.source_idx == -1`, plain `SimpleNamespace`
+  action) by `_flatten`, dropped by the collapse when the robot is already
+  there; the DP prices it as driven (return `distance(place, origin_name)`,
+  then from `origin_name`; from `None`, i.e. `seed`, while the robot has not
+  moved), and it makes the origin known when `origin=None`.
+  A name `distance` cannot reach is ignored (`_reachable`), so a typo plans
+  like no name. `planned_travel(..., origin_name)` re-derives that drive;
+  `test_named_start_is_priced_as_driven` checks it against brute force. Each headless command's fallback starts with it too, and
+  those actions' dependency effects are keyed at `origin_name` instead of `None`
+  (`_annotate_effects(start=)`; the checker takes the same `start`). Sim passes
+  `run_sim.start_name` (`start_location`). `here_*` scenarios,
+  `test_origin_name_only_adds_the_drive_back`, `improvements.md` §4–5.
 - Everything reaches command objects through `getattr`, so plain
   `SimpleNamespace` stand-ins work. That duck-typing is load-bearing.
 - **Cross-command dependencies (on by default).** Each action has read/write
@@ -118,6 +141,17 @@ Things that will bite you:
   like `distance=`) makes a room overlap the spots inside it; without it only equal
   names conflict. `dependencies=False` = travel-only, for ablations. Sim passes
   `World.room_of` (zones). `scenarios/merger.json` `dep_*` pin the cases.
+- **`holding_penalty` (λ, default 0).** Every metre driven while some command
+  holds an object costs λ extra: hops (`holding_penalty * row[u]` when the DP
+  state has a holder) and escort legs inside a segment (the paper's ρ, distance
+  part: `_carried_inside`, from `_Segment.escorts`, split by whether the
+  segment starts holding; legs of a headless escort start at the pose while the
+  robot has not moved). Still exact: both depend only on the state
+  (`test_holding_penalty_is_exact`, brute force). `planned_travel(...,
+  holding_penalty=)` re-derives it. `holding_penalty_*` scenarios pin the flips
+  (`..._counts_escorts_while_holding` fails if only hops count);
+  `bench_holding.py` gives the trade-off (λ=1: carried 6.49 m vs 8.04 at λ=0 and
+  6.22 sequential, travel +2.9%). κ and τ are not modelled (`futureWork.md`).
 - **`distance=` is the only metric hook.** `merge(..., distance=fn)` replaces
   `_euclidean`. It takes location **names**, `fn(from_name | None, to_name)`, where
   `None` is the robot origin (only asked when `origin` is not None) — the same
@@ -130,31 +164,26 @@ Things that will bite you:
 - `plan.fallback` is the per-command original sequence — the sim reuses it
   verbatim as the sequential baseline, so no separate baseline scheduler exists.
 
-### bt_builder.py / leaf_behaviours.py
+### bt_builder.py / recovery.py
 
-```
-Selector "gpsr_root" (memory)
-  ├── Timeout(GLOBAL_BUDGET_S) ▸ Sequence "interleaved"
-  │     └── Retry(2) ▸ Timeout(timeout_for(kind)) ▸ ActionLeaf   (per action)
-  └── Sequence "sequential_fallback"
-        └── SequentialFallbackLeaf  (per command; always returns SUCCESS)
-```
+The memory sequence ticks the merged order, optional sequential fallback,
+deferral, return, and failure reporting. `build_tree()` defaults to
+`sequential-fallback`, while merged simulator runs default to `skip-defer`.
+The paired trial runner chooses each recovery policy explicitly.
 
-- **Handler dispatch is by method name.** `_resolve_method(kind, handlers)` picks
-  the first object in `subtask_handlers` exposing a callable named after the
-  action kind, calls it with the bare action object, and expects
-  `(Status, result)` (a bare `Status` is tolerated). This is the entire
-  integration surface — no registration, no base class.
-- Leaves are **synchronous and blocking**. py_trees `Timeout` decorators only
-  check between ticks, so real timeout enforcement must live *inside* the
-  handler. `sim/handlers.py` mirrors that with `robot.deadline` in sim-time —
-  do not "fix" it with a wall-clock abort, it would misrepresent where
-  enforcement lives on the robot.
-- The fallback branch always returns SUCCESS: its job is to give every command a
-  chance, not to gate on outcomes.
-- `is_completed` enables *resume* rather than restart in the fallback: a
-  completed non-`go_to` is skipped, and a `go_to` is skipped only when its whole
-  following segment is already done.
+- The skill dispatch resolves methods by action name and accepts a bare
+  `Status` or `(Status, result)`. Status callbacks and reports carry source
+  command and action indices.
+- `ExecutionHooks` supplies the clock, the absolute deadline, gripper
+  verification, revisit estimates, and the return and reporting operations.
+  The clock is simulated in `run_sim.py`. Skills enforce it inside their
+  synchronous calls.
+- Fallback gives the holder's command priority over competing picks. Both
+  local policies keep independent work and shared navigation after a failure.
+  Only independently recoverable information work can be deferred.
+- `.venv/bin/python -m sim.recovery_trials` reproduces the paired paper
+  table. `tests/test_recovery.py` checks the results and failure-specific
+  execution traces. See `improvements.md` for the home2 port requirements.
 
 ### sim/
 
@@ -162,7 +191,7 @@ Selector "gpsr_root" (memory)
 |---|---|
 | `apartment.json` | open-plan floor plan: bounds, zones, furniture, 19 locations, 8 objects, 3 people — data only. Every location must be in free space (tested) |
 | `routing/` | **all navigation lives here, never in `gpsr_merger/`** (Nav2 owns it on the robot). `base.Router` protocol (`set_people`, `free_point`, `plan_path`, `distance`); `obstacles.py` inflates furniture and people rects by `ROBOT_RADIUS` (0.364 m, from the mjcf footprint) + margin; `visgraph.VisGraphRouter` = visibility graph + Dijkstra, exact and deterministic. A grid/A* router can be added later behind the same protocol |
-| `scenarios_visual.json` | `showcase_merge` (**default, the demo**): 4 commands that each zig-zag north↔south, so ordering matters — merged is ~26% faster / ~39% less driving. `showcase_all_leaves`: 4 commands whose union hits all 13 leaf kinds (coverage; the 7 original tests use it, and it saves only ~4–8% so it is a poor demo) |
+| `scenarios_visual.json` | `showcase_exits`: a guide and a follow that end far from where they start, plus a command with no `go_to` (pins exit pricing; start the guide from `lobby`, not `entrance` — a guide whose route passes the person's standing spot clips them). `showcase_merge` (**default, the demo**): 4 commands that each zig-zag north↔south, so ordering matters — merged is ~26% faster / ~39% less driving. `showcase_all_leaves`: 4 commands whose union hits all 13 leaf kinds (coverage; the 7 original tests use it, and it saves only ~7–14% so it is a poor demo) |
 | `world.py` | loads the apartment; `World.locator` is the merger-facing contract (mirrors `GPSRTM._resolve_xy`, returns `None` for unknown) |
 | `mjcf.py` | apartment JSON → MuJoCo MJCF string |
 | `robot.py` | kinematic base, gripper, pedestrians; raises `SimTimeout` past `deadline`. `drive_path` drives router waypoints; `follow_person`/`lead_person` move robot and person along one shared track |
@@ -208,11 +237,13 @@ by name in the paper:
 
 `tests/test_sim_run.py` re-witnesses these at execution time, plus
 `test_merged_travels_less_than_sequential` and
-`test_cost_model_gap_is_attributable_to_non_goto_displacement` (the planner only
-models `go_to` hops, so the gap must come from follow/guide/pick stand-off).
+`test_cost_model_gap_is_attributable_to_non_goto_displacement` (the planner
+models hops between segments, so the gap must come from follow/guide/pick
+stand-off), `test_exit_locations_are_priced` (gap = in-segment displacement to
+within `FOLLOW_GAP`) and `test_command_without_go_to_runs_at_the_origin`.
 Navigation evidence, all read from the event log:
 `test_every_location_is_in_free_space`, `test_robot_never_overlaps_furniture_or_walls`,
-`test_robot_keeps_clear_of_people` (these sweep `COLLISION_RUNS`: both showcases,
+`test_robot_keeps_clear_of_people` (these sweep `COLLISION_RUNS`: the three showcases,
 both orderings, and one run with injected failures) and
 `test_planned_cost_is_the_driven_metric`.
 
@@ -233,7 +264,7 @@ people (a kind missing there is assumed to touch no shared state).
 
 ## Scope limits worth remembering
 
-- Only `showcase_merge` and `showcase_all_leaves` are fully provisioned in the apartment. The 27
+- Only `showcase_merge`, `showcase_all_leaves` and `showcase_exits` are fully provisioned in the apartment. The 62
   scenarios in `scenarios/merger.json` are unit tests *for the scheduler*; they
   reference locations like `A`/`loc7` and people like `Jane` that do not exist in
   the apartment, so their perception leaves correctly report `TARGET_NOT_FOUND`.

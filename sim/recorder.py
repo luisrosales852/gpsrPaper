@@ -54,6 +54,7 @@ class Recorder:
         self.people_trail: List[List[Tuple[float, float]]] = []
         self.waypoints: List[Dict[str, Any]] = []
         self.events: List[Dict[str, Any]] = []
+        self.failure_reports: List[Dict[str, Any]] = []
         self.done: Dict[Tuple[int, int], bool] = {}
         self.current: Optional[Tuple[int, int]] = None
         self.leaf_line = ""
@@ -164,6 +165,7 @@ class Recorder:
         self.events.append({
             "t": round(robot.t, 3), "phase": "start", "kind": kind,
             "cmd": key[0], "idx": key[1], "x": round(x, 3), "y": round(y, 3),
+            "purpose": plan_action.purpose,
             "held": robot.held.kind if robot.held else None,
             "distance_m": round(robot.distance_m, 3), "branch": self.branch,
         })
@@ -180,11 +182,19 @@ class Recorder:
         self.events.append({
             "t": round(robot.t, 3), "phase": "end", "kind": kind,
             "cmd": key[0], "idx": key[1],
+            "purpose": plan_action.purpose,
             "status": getattr(status, "name", str(status)),
-            "result": None if result is None else str(result)[:120],
+            "result": None if result is None else str(result),
             "x": round(x, 3), "y": round(y, 3),
             "held": robot.held.kind if robot.held else None,
             "distance_m": round(robot.distance_m, 3), "branch": self.branch,
+        })
+
+    def failure_report(self, plan_action, status, text, robot) -> None:
+        self.failure_reports.append({
+            "t": round(robot.t, 3), "cmd": plan_action.source_cmd,
+            "idx": plan_action.source_idx, "status": status.name, "text": text,
+            "x": round(robot.xy[0], 3), "y": round(robot.xy[1], 3),
         })
 
     # ---- output ----------------------------------------------------------
@@ -214,6 +224,7 @@ class Recorder:
             json.dump({
                 "summary": self.summary(extra),
                 "events": self.events,
+                "failure_reports": self.failure_reports,
                 "waypoints": self.waypoints,
                 "labels": self.labels,
                 "frames": self.frame_log,

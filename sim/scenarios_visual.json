@@ -182,5 +182,68 @@
         }
       ]
     ]
+  },
+  {
+    "name": "showcase_exits",
+    "description": "Exit locations and a command with no leading go_to. The guide ends in the kitchen and the follow ends in the garage, far from where each starts; c0 has no go_to, so it runs where the robot starts. Planned travel: 19.9 m merged vs 21.6 m sequential. Pricing each hop from where the previous segment started (the old model) picks an order that really costs 37.3 m.",
+    "origin": [
+      0.0,
+      0.0
+    ],
+    "commands": [
+      [
+        {
+          "action": "answer_question"
+        }
+      ],
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "lobby"
+        },
+        {
+          "action": "find_person",
+          "attribute_value": "wearing a black blouse"
+        },
+        {
+          "action": "guide_person_to",
+          "destination_room": "kitchen"
+        }
+      ],
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "counter"
+        },
+        {
+          "action": "get_visual_info",
+          "measure": "biggest",
+          "object_category": "dishware"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "office"
+        },
+        {
+          "action": "say_with_context",
+          "user_instruction": "the biggest dish on the counter",
+          "previous_command_info": []
+        }
+      ],
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "bookshelf"
+        },
+        {
+          "action": "find_person",
+          "attribute_value": "wearing a yellow shirt"
+        },
+        {
+          "action": "follow_person_until",
+          "destination": "garage"
+        }
+      ]
+    ]
   }
 ]

@@ -90,11 +90,12 @@ def gripper_walk_strict(plan_actions: Iterable[PlanAction]) -> bool:
     return True
 
 
-def action_effects_by_source(commands: Sequence[Any]) -> dict:
-    """``{(cmd, idx): (reads, writes)}`` for every action."""
+def action_effects_by_source(commands: Sequence[Any], start=None) -> dict:
+    """``{(cmd, idx): (reads, writes)}`` for every action; ``start`` is the
+    place of actions before a command's first go_to (None = unknown)."""
     out = {}
     for c, command in enumerate(commands):
-        here = None
+        here = _norm_location(start)
         for i, action in enumerate(getattr(command, "commands", [])):
             reads, writes, here = _action_effects(action, here)
             out[(c, i)] = (reads, writes)
@@ -102,10 +103,10 @@ def action_effects_by_source(commands: Sequence[Any]) -> dict:
 
 
 def conflict_order_preserved(plan_actions: Sequence[PlanAction], commands: Sequence[Any],
-                             room_of=None) -> bool:
+                             room_of=None, start=None) -> bool:
     """Conflicting actions of different commands run in issue order
     (checked per action, independently of the merger's segment table)."""
-    effects = action_effects_by_source(commands)
+    effects = action_effects_by_source(commands, start)
 
     def room(place):
         return _norm_location(room_of(place)) if (room_of and place) else None
@@ -116,7 +117,8 @@ def conflict_order_preserved(plan_actions: Sequence[PlanAction], commands: Seque
     def clash(writes, others):
         return any(w[0] == o[0] and overlap(w[1], o[1]) for w in writes for o in others)
 
-    seq = [(pa.source_cmd, pa.source_idx) for pa in plan_actions]
+    # Inserted go_to(origin_name) (source_idx -1) touches no state.
+    seq = [(pa.source_cmd, pa.source_idx) for pa in plan_actions if pa.source_idx != -1]
     for i, (ci, ai) in enumerate(seq):
         ri, wi = effects[(ci, ai)]
         for cj, aj in seq[i + 1:]:
@@ -126,6 +128,62 @@ def conflict_order_preserved(plan_actions: Sequence[PlanAction], commands: Seque
             if clash(wi, rj | wj) or clash(wj, ri):
                 return False
     return True
+
+
+_ESCORT_DEST = {"follow_person_until": "destination", "guide_person_to": "destination_room"}
+
+
+def planned_travel(plan_actions: Sequence[PlanAction], commands: Sequence[Any], distance,
+                   has_origin: bool, origin_name=None, holding_penalty=0.0, *,
+                   navigation_overhead=0.0) -> float:
+    """The merger's travel objective, re-derived per action: go_to hops priced
+    from where the robot last ended (escort destinations included), and actions
+    before a command's first go_to priced at the origin (driven by the inserted
+    go_to when ``origin_name`` is given). Every metre driven while holding, on
+    a hop or an escort, adds ``holding_penalty``. Unknown hops count 0."""
+    origin = object()
+    pos = origin
+    total = 0.0
+    held = False
+
+    def hop(a, b):
+        if a == b:
+            return 0.0
+        if a is origin or b is origin:
+            if not has_origin:
+                return 0.0
+            a, b = None, (b if a is origin else a)
+        d = distance(a, b)
+        return d if d is not None and d < float("inf") else 0.0
+
+    def navigation(a, b, weight):
+        distance_m = hop(a, b)
+        return weight * distance_m + (navigation_overhead if distance_m > 0 else 0.0)
+
+    for pa in plan_actions:
+        kind = getattr(pa.action, "action", "")
+        weight = 1.0 + holding_penalty if held else 1.0
+        if pa.source_idx == -1 and origin_name is None:
+            total += navigation(pos, origin, weight)
+            pos = origin
+            continue
+        if kind == "go_to":
+            tgt = getattr(pa.action, "location_to_go", None)
+            if tgt is not None:
+                total += navigation(pos, tgt, weight)
+                pos = tgt
+            continue
+        before = list(getattr(commands[pa.source_cmd], "commands", []))[: pa.source_idx]
+        if origin_name is None and all(getattr(x, "action", "") != "go_to" for x in before):
+            total += navigation(pos, origin, weight)
+            pos = origin
+        held = (held or pa.requires_gripper) and not pa.releases_gripper
+        dest = getattr(pa.action, _ESCORT_DEST.get(kind, ""), None) if kind in _ESCORT_DEST else None
+        if isinstance(dest, str) and dest.strip():
+            if held:
+                total += holding_penalty * hop(pos, dest)
+            pos = dest
+    return total
 
 
 def build_commands(commands_json: Sequence[Sequence[dict]]) -> List[Any]:
@@ -197,6 +255,10 @@ def merge_kwargs(sc: dict) -> dict:
         kwargs["room_of"] = make_room_of(sc["rooms"])
     if "dependencies" in sc:
         kwargs["dependencies"] = bool(sc["dependencies"])
+    if "origin_name" in sc:
+        kwargs["origin_name"] = sc["origin_name"]
+    if "holding_penalty" in sc:
+        kwargs["holding_penalty"] = sc["holding_penalty"]
     return kwargs
 
 
@@ -232,7 +294,7 @@ def describe_plan(plan: InterleavedPlan) -> str:
 
 
 def evaluate_expectations(
-    plan: InterleavedPlan, commands: Sequence[Any], expect: dict, room_of=None
+    plan: InterleavedPlan, commands: Sequence[Any], expect: dict, room_of=None, start=None
 ) -> Tuple[bool, List[str]]:
     """Run the declarative checks in ``expect`` against a merged ``plan``.
 
@@ -364,7 +426,7 @@ def evaluate_expectations(
         if (ca, ia) not in pos or (cb, ib) not in pos or pos[(ca, ia)] > pos[(cb, ib)]:
             fail(f"action_before ({ca},{ia}) < ({cb},{ib})")
     if "conflict_order_preserved" in expect:
-        got = conflict_order_preserved(A, commands, room_of)
+        got = conflict_order_preserved(A, commands, room_of, start)
         if got != expect["conflict_order_preserved"]:
             fail(f"conflict_order_preserved: got {got}")
 

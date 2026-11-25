@@ -1176,12 +1176,13 @@
     "expect": {
       "non_goto_preserved": true,
       "location_visit_counts": {
-        "chairs": 1
+        "chairs": 2
       },
-      "go_to_location_source_cmd": {
-        "chairs": 0
-      },
-      "first_go_to_source_cmd": 0
+      "first_go_to_source_cmd": 0,
+      "go_to_source_cmds": [
+        0,
+        1
+      ]
     }
   },
   {
@@ -3119,6 +3120,1574 @@
           ],
           [
             0,
+            1
+          ]
+        ]
+      ]
+    }
+  },
+  {
+    "name": "exit_guide_prices_next_hop_from_destination",
+    "commands": [
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "A"
+        },
+        {
+          "action": "find_person",
+          "attribute_value": "waving"
+        },
+        {
+          "action": "guide_person_to",
+          "destination_room": "B"
+        }
+      ],
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "C"
+        },
+        {
+          "action": "get_visual_info",
+          "measure": "biggest",
+          "object_category": "fruit"
+        }
+      ],
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "D"
+        },
+        {
+          "action": "get_visual_info",
+          "measure": "biggest",
+          "object_category": "fruit"
+        }
+      ]
+    ],
+    "coords": {
+      "A": [
+        1,
+        0
+      ],
+      "B": [
+        10,
+        0
+      ],
+      "C": [
+        11,
+        0
+      ],
+      "D": [
+        2,
+        0
+      ]
+    },
+    "origin": [
+      0,
+      0
+    ],
+    "expect": {
+      "per_command_order": true,
+      "non_goto_preserved": true,
+      "gripper_invariant": true,
+      "go_to_order": [
+        "D",
+        "A",
+        "C"
+      ]
+    }
+  },
+  {
+    "name": "exit_follow_prices_next_hop_from_destination",
+    "commands": [
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "C"
+        },
+        {
+          "action": "get_visual_info",
+          "measure": "biggest",
+          "object_category": "fruit"
+        }
+      ],
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "A"
+        },
+        {
+          "action": "find_person",
+          "attribute_value": "waving"
+        },
+        {
+          "action": "follow_person_until",
+          "destination": "B"
+        }
+      ],
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "D"
+        },
+        {
+          "action": "get_visual_info",
+          "measure": "biggest",
+          "object_category": "fruit"
+        }
+      ]
+    ],
+    "coords": {
+      "A": [
+        1,
+        0
+      ],
+      "B": [
+        10,
+        0
+      ],
+      "C": [
+        11,
+        0
+      ],
+      "D": [
+        2,
+        0
+      ]
+    },
+    "origin": [
+      0,
+      0
+    ],
+    "expect": {
+      "per_command_order": true,
+      "non_goto_preserved": true,
+      "gripper_invariant": true,
+      "go_to_order": [
+        "D",
+        "A",
+        "C"
+      ]
+    }
+  },
+  {
+    "name": "exit_follow_without_destination_keeps_entry",
+    "commands": [
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "A"
+        },
+        {
+          "action": "find_person",
+          "attribute_value": "waving"
+        },
+        {
+          "action": "follow_person_until"
+        }
+      ],
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "C"
+        },
+        {
+          "action": "get_visual_info",
+          "measure": "biggest",
+          "object_category": "fruit"
+        }
+      ],
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "D"
+        },
+        {
+          "action": "get_visual_info",
+          "measure": "biggest",
+          "object_category": "fruit"
+        }
+      ]
+    ],
+    "coords": {
+      "A": [
+        1,
+        0
+      ],
+      "B": [
+        10,
+        0
+      ],
+      "C": [
+        11,
+        0
+      ],
+      "D": [
+        2,
+        0
+      ]
+    },
+    "origin": [
+      0,
+      0
+    ],
+    "expect": {
+      "per_command_order": true,
+      "non_goto_preserved": true,
+      "gripper_invariant": true,
+      "go_to_order": [
+        "A",
+        "D",
+        "C"
+      ]
+    }
+  },
+  {
+    "name": "exit_keeps_go_to_after_escort",
+    "commands": [
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "A"
+        },
+        {
+          "action": "find_person",
+          "attribute_value": "waving"
+        },
+        {
+          "action": "guide_person_to",
+          "destination_room": "B"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "A"
+        },
+        {
+          "action": "say_with_context",
+          "user_instruction": "done"
+        }
+      ]
+    ],
+    "coords": {
+      "A": [
+        1,
+        0
+      ],
+      "B": [
+        10,
+        0
+      ],
+      "C": [
+        11,
+        0
+      ],
+      "D": [
+        2,
+        0
+      ]
+    },
+    "origin": [
+      0,
+      0
+    ],
+    "expect": {
+      "per_command_order": true,
+      "non_goto_preserved": true,
+      "gripper_invariant": true,
+      "location_visit_counts": {
+        "A": 2
+      },
+      "source_idx_order": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ]
+    }
+  },
+  {
+    "name": "here_runs_first_at_origin",
+    "commands": [
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "A"
+        },
+        {
+          "action": "count",
+          "target_to_count": "cups"
+        }
+      ],
+      [
+        {
+          "action": "answer_question"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "B"
+        },
+        {
+          "action": "count",
+          "target_to_count": "cups"
+        }
+      ]
+    ],
+    "coords": {
+      "A": [
+        5,
+        0
+      ],
+      "B": [
+        6,
+        0
+      ]
+    },
+    "origin": [
+      0,
+      0
+    ],
+    "expect": {
+      "per_command_order": true,
+      "non_goto_preserved": true,
+      "gripper_invariant": true,
+      "source_cmd_order": [
+        1,
+        0,
+        0,
+        1,
+        1
+      ]
+    }
+  },
+  {
+    "name": "here_with_origin_none",
+    "commands": [
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "A"
+        },
+        {
+          "action": "count",
+          "target_to_count": "cups"
+        }
+      ],
+      [
+        {
+          "action": "answer_question"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "B"
+        },
+        {
+          "action": "count",
+          "target_to_count": "cups"
+        }
+      ]
+    ],
+    "coords": {
+      "A": [
+        5,
+        0
+      ],
+      "B": [
+        6,
+        0
+      ]
+    },
+    "origin": null,
+    "expect": {
+      "per_command_order": true,
+      "non_goto_preserved": true,
+      "gripper_invariant": true,
+      "source_cmd_order": [
+        1,
+        1,
+        1,
+        0,
+        0
+      ]
+    }
+  },
+  {
+    "name": "here_forced_late_by_gripper",
+    "commands": [
+      [
+        {
+          "action": "pick_object",
+          "object_to_pick": "cup"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "A"
+        },
+        {
+          "action": "place_object"
+        }
+      ],
+      [
+        {
+          "action": "pick_object",
+          "object_to_pick": "book"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "B"
+        },
+        {
+          "action": "place_object"
+        }
+      ]
+    ],
+    "coords": {
+      "A": [
+        5,
+        0
+      ],
+      "B": [
+        6,
+        0
+      ]
+    },
+    "origin": [
+      0,
+      0
+    ],
+    "expect": {
+      "per_command_order": true,
+      "non_goto_preserved": true,
+      "gripper_invariant": true,
+      "gripper_walk_strict": true,
+      "source_cmd_order": [
+        0,
+        0,
+        0,
+        1,
+        1,
+        1
+      ],
+      "action_count": {
+        "go_to": 2
+      }
+    }
+  },
+  {
+    "name": "here_escort_can_run_late_without_drive_back",
+    "commands": [
+      [
+        {
+          "action": "find_person",
+          "attribute_value": "waving"
+        },
+        {
+          "action": "follow_person_until",
+          "destination": "B"
+        }
+      ],
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "C"
+        },
+        {
+          "action": "get_visual_info",
+          "measure": "biggest",
+          "object_category": "fruit"
+        }
+      ],
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "D"
+        },
+        {
+          "action": "get_visual_info",
+          "measure": "biggest",
+          "object_category": "fruit"
+        }
+      ]
+    ],
+    "coords": {
+      "B": [
+        10,
+        0
+      ],
+      "C": [
+        11,
+        0
+      ],
+      "D": [
+        1,
+        0
+      ]
+    },
+    "origin": [
+      0,
+      0
+    ],
+    "expect": {
+      "per_command_order": true,
+      "non_goto_preserved": true,
+      "gripper_invariant": true,
+      "go_to_order": [
+        "D",
+        "C"
+      ],
+      "action_before": [
+        [
+          [
+            2,
+            1
+          ],
+          [
+            0,
+            0
+          ]
+        ],
+        [
+          [
+            0,
+            1
+          ],
+          [
+            1,
+            0
+          ]
+        ]
+      ],
+      "action_count": {
+        "go_to": 2
+      }
+    }
+  },
+  {
+    "name": "here_named_start_drives_back_when_forced_late",
+    "description": "here_forced_late_by_gripper with a named start: c1's pick runs after a go_to back to S, not at A.",
+    "commands": [
+      [
+        {
+          "action": "pick_object",
+          "object_to_pick": "cup"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "A"
+        },
+        {
+          "action": "place_object"
+        }
+      ],
+      [
+        {
+          "action": "pick_object",
+          "object_to_pick": "book"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "B"
+        },
+        {
+          "action": "place_object"
+        }
+      ]
+    ],
+    "coords": {
+      "A": [
+        5,
+        0
+      ],
+      "B": [
+        6,
+        0
+      ],
+      "S": [
+        0,
+        0
+      ]
+    },
+    "origin": [
+      0,
+      0
+    ],
+    "origin_name": "S",
+    "expect": {
+      "per_command_order": true,
+      "non_goto_preserved": true,
+      "gripper_invariant": true,
+      "gripper_walk_strict": true,
+      "go_to_order": [
+        "A",
+        "S",
+        "B"
+      ],
+      "source_idx_order": [
+        0,
+        1,
+        2,
+        -1,
+        0,
+        1,
+        2
+      ],
+      "fallback_source_idx": [
+        [
+          -1,
+          0,
+          1,
+          2
+        ],
+        [
+          -1,
+          0,
+          1,
+          2
+        ]
+      ]
+    }
+  },
+  {
+    "name": "here_named_start_first_inserts_nothing",
+    "description": "here_runs_first_at_origin with a named start: the headless segment runs first, so no go_to is added.",
+    "commands": [
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "A"
+        },
+        {
+          "action": "count",
+          "target_to_count": "cups"
+        }
+      ],
+      [
+        {
+          "action": "answer_question"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "B"
+        },
+        {
+          "action": "count",
+          "target_to_count": "cups"
+        }
+      ]
+    ],
+    "coords": {
+      "A": [
+        5,
+        0
+      ],
+      "B": [
+        6,
+        0
+      ],
+      "S": [
+        0,
+        0
+      ]
+    },
+    "origin": [
+      0,
+      0
+    ],
+    "origin_name": "S",
+    "expect": {
+      "per_command_order": true,
+      "non_goto_preserved": true,
+      "gripper_invariant": true,
+      "source_cmd_order": [
+        1,
+        0,
+        0,
+        1,
+        1
+      ],
+      "source_idx_order": [
+        0,
+        0,
+        1,
+        1,
+        2
+      ],
+      "go_to_order": [
+        "A",
+        "B"
+      ]
+    }
+  },
+  {
+    "name": "here_named_start_no_double_go_to",
+    "description": "c0 ends by placing at S, where c1 picks before its first go_to: a real conflict at the start keeps c1 after c0, and c1 needs no inserted go_to because c0 already drove to S.",
+    "commands": [
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "A"
+        },
+        {
+          "action": "pick_object",
+          "object_to_pick": "cup"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "S"
+        },
+        {
+          "action": "place_object"
+        }
+      ],
+      [
+        {
+          "action": "pick_object",
+          "object_to_pick": "book"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "B"
+        },
+        {
+          "action": "place_object"
+        }
+      ]
+    ],
+    "coords": {
+      "A": [
+        5,
+        0
+      ],
+      "B": [
+        6,
+        0
+      ],
+      "S": [
+        0,
+        0
+      ]
+    },
+    "origin": [
+      0,
+      0
+    ],
+    "origin_name": "S",
+    "expect": {
+      "per_command_order": true,
+      "non_goto_preserved": true,
+      "gripper_invariant": true,
+      "gripper_walk_strict": true,
+      "go_to_order": [
+        "A",
+        "S",
+        "B"
+      ],
+      "source_idx_order": [
+        0,
+        1,
+        2,
+        3,
+        0,
+        1,
+        2
+      ],
+      "conflict_order_preserved": true
+    }
+  },
+  {
+    "name": "here_named_start_prices_unknown_origin",
+    "description": "here_escort_can_run_late_without_drive_back with origin=None: the name makes the origin known, so the plan matches the origin-known one (and drives back to S).",
+    "commands": [
+      [
+        {
+          "action": "find_person",
+          "attribute_value": "waving"
+        },
+        {
+          "action": "follow_person_until",
+          "destination": "B"
+        }
+      ],
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "C"
+        },
+        {
+          "action": "get_visual_info",
+          "measure": "biggest",
+          "object_category": "fruit"
+        }
+      ],
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "D"
+        },
+        {
+          "action": "get_visual_info",
+          "measure": "biggest",
+          "object_category": "fruit"
+        }
+      ]
+    ],
+    "coords": {
+      "B": [
+        10,
+        0
+      ],
+      "C": [
+        11,
+        0
+      ],
+      "D": [
+        1,
+        0
+      ],
+      "S": [
+        0,
+        0
+      ]
+    },
+    "origin": null,
+    "origin_name": "S",
+    "expect": {
+      "per_command_order": true,
+      "non_goto_preserved": true,
+      "gripper_invariant": true,
+      "go_to_order": [
+        "D",
+        "S",
+        "C"
+      ],
+      "source_cmd_order": [
+        2,
+        2,
+        0,
+        0,
+        0,
+        1,
+        1
+      ]
+    }
+  },
+  {
+    "name": "dep_here_unknown_place_conflicts_with_everything",
+    "commands": [
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "couch"
+        },
+        {
+          "action": "find_person"
+        },
+        {
+          "action": "follow_person_until",
+          "destination": "kitchen"
+        }
+      ],
+      [
+        {
+          "action": "find_person",
+          "attribute_value": "waving"
+        },
+        {
+          "action": "get_person_info",
+          "info_type": "name"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "kitchen"
+        },
+        {
+          "action": "say_with_context",
+          "user_instruction": "name"
+        }
+      ]
+    ],
+    "coords": {
+      "couch": [
+        8,
+        0
+      ],
+      "kitchen": [
+        9,
+        0
+      ],
+      "S": [
+        0,
+        0
+      ]
+    },
+    "origin": [
+      0,
+      0
+    ],
+    "description": "Without origin_name, c1's find_person before its first go_to has place None, which overlaps c0's escort, so c1 waits for c0.",
+    "expect": {
+      "per_command_order": true,
+      "non_goto_preserved": true,
+      "gripper_invariant": true,
+      "conflict_order_preserved": true,
+      "source_cmd_order": [
+        0,
+        0,
+        0,
+        1,
+        1,
+        1,
+        1
+      ]
+    }
+  },
+  {
+    "name": "dep_here_named_start_drops_spurious_conflict",
+    "commands": [
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "couch"
+        },
+        {
+          "action": "find_person"
+        },
+        {
+          "action": "follow_person_until",
+          "destination": "kitchen"
+        }
+      ],
+      [
+        {
+          "action": "find_person",
+          "attribute_value": "waving"
+        },
+        {
+          "action": "get_person_info",
+          "info_type": "name"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "kitchen"
+        },
+        {
+          "action": "say_with_context",
+          "user_instruction": "name"
+        }
+      ]
+    ],
+    "coords": {
+      "couch": [
+        8,
+        0
+      ],
+      "kitchen": [
+        9,
+        0
+      ],
+      "S": [
+        0,
+        0
+      ]
+    },
+    "origin": [
+      0,
+      0
+    ],
+    "origin_name": "S",
+    "description": "With origin_name, c1's find_person acts at S, which c0's escort (couch -> kitchen) does not touch: c1 runs first, at the start.",
+    "expect": {
+      "per_command_order": true,
+      "non_goto_preserved": true,
+      "gripper_invariant": true,
+      "conflict_order_preserved": true,
+      "source_cmd_order": [
+        1,
+        1,
+        0,
+        0,
+        0,
+        1,
+        1
+      ],
+      "go_to_order": [
+        "couch",
+        "kitchen"
+      ]
+    }
+  },
+  {
+    "name": "here_named_start_unknown_name_falls_back",
+    "description": "origin_name 'S' is not a known place: merge() ignores it and plans exactly like here_forced_late_by_gripper (no go_to(S) that would fail on the robot).",
+    "commands": [
+      [
+        {
+          "action": "pick_object",
+          "object_to_pick": "cup"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "A"
+        },
+        {
+          "action": "place_object"
+        }
+      ],
+      [
+        {
+          "action": "pick_object",
+          "object_to_pick": "book"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "B"
+        },
+        {
+          "action": "place_object"
+        }
+      ]
+    ],
+    "coords": {
+      "A": [
+        5,
+        0
+      ],
+      "B": [
+        6,
+        0
+      ]
+    },
+    "origin": [
+      0,
+      0
+    ],
+    "origin_name": "S",
+    "expect": {
+      "per_command_order": true,
+      "non_goto_preserved": true,
+      "gripper_invariant": true,
+      "gripper_walk_strict": true,
+      "go_to_order": [
+        "A",
+        "B"
+      ],
+      "source_idx_order": [
+        0,
+        1,
+        2,
+        0,
+        1,
+        2
+      ],
+      "fallback_source_idx": [
+        [
+          0,
+          1,
+          2
+        ],
+        [
+          0,
+          1,
+          2
+        ]
+      ]
+    }
+  },
+  {
+    "name": "here_named_start_unreachable_falls_back",
+    "description": "'S' is a known place but distance() has no path to it from the robot: same fallback as an unknown name.",
+    "commands": [
+      [
+        {
+          "action": "pick_object",
+          "object_to_pick": "cup"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "A"
+        },
+        {
+          "action": "place_object"
+        }
+      ],
+      [
+        {
+          "action": "pick_object",
+          "object_to_pick": "book"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "B"
+        },
+        {
+          "action": "place_object"
+        }
+      ]
+    ],
+    "coords": {
+      "A": [
+        5,
+        0
+      ],
+      "B": [
+        6,
+        0
+      ],
+      "S": [
+        0,
+        0
+      ]
+    },
+    "origin": [
+      0,
+      0
+    ],
+    "origin_name": "S",
+    "distance_overrides": [
+      [
+        "origin",
+        "S",
+        null
+      ]
+    ],
+    "expect": {
+      "per_command_order": true,
+      "non_goto_preserved": true,
+      "gripper_invariant": true,
+      "gripper_walk_strict": true,
+      "go_to_order": [
+        "A",
+        "B"
+      ],
+      "source_idx_order": [
+        0,
+        1,
+        2,
+        0,
+        1,
+        2
+      ],
+      "fallback_source_idx": [
+        [
+          0,
+          1,
+          2
+        ],
+        [
+          0,
+          1,
+          2
+        ]
+      ]
+    }
+  },
+  {
+    "name": "here_named_start_unknown_name_origin_none",
+    "description": "Unknown origin_name with origin=None: no place prices from 'S', so it is ignored and the plan equals here_with_origin_none.",
+    "commands": [
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "A"
+        },
+        {
+          "action": "count",
+          "target_to_count": "cups"
+        }
+      ],
+      [
+        {
+          "action": "answer_question"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "B"
+        },
+        {
+          "action": "count",
+          "target_to_count": "cups"
+        }
+      ]
+    ],
+    "coords": {
+      "A": [
+        5,
+        0
+      ],
+      "B": [
+        6,
+        0
+      ]
+    },
+    "origin": null,
+    "origin_name": "S",
+    "expect": {
+      "per_command_order": true,
+      "non_goto_preserved": true,
+      "gripper_invariant": true,
+      "source_cmd_order": [
+        1,
+        1,
+        1,
+        0,
+        0
+      ],
+      "source_idx_order": [
+        0,
+        1,
+        2,
+        0,
+        1
+      ]
+    }
+  },
+  {
+    "name": "holding_penalty_zero_carries_through_bedroom",
+    "commands": [
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "kitchen"
+        },
+        {
+          "action": "pick_object",
+          "object_to_pick": "cup"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "living_room"
+        },
+        {
+          "action": "place_object"
+        }
+      ],
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "bedroom"
+        },
+        {
+          "action": "count",
+          "target_to_count": "people"
+        }
+      ]
+    ],
+    "coords": {
+      "kitchen": [
+        10,
+        0
+      ],
+      "bedroom": [
+        11,
+        2
+      ],
+      "living_room": [
+        0,
+        2
+      ]
+    },
+    "origin": [
+      0,
+      0
+    ],
+    "description": "Plain travel: picking the cup first and counting in the bedroom on the way is 0.38 m shorter (23.24 vs 23.62 m) but carries the cup 13.24 m instead of 10.20 m.",
+    "expect": {
+      "per_command_order": true,
+      "non_goto_preserved": true,
+      "gripper_invariant": true,
+      "go_to_order": [
+        "kitchen",
+        "bedroom",
+        "living_room"
+      ]
+    }
+  },
+  {
+    "name": "holding_penalty_counts_before_picking",
+    "commands": [
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "kitchen"
+        },
+        {
+          "action": "pick_object",
+          "object_to_pick": "cup"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "living_room"
+        },
+        {
+          "action": "place_object"
+        }
+      ],
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "bedroom"
+        },
+        {
+          "action": "count",
+          "target_to_count": "people"
+        }
+      ]
+    ],
+    "coords": {
+      "kitchen": [
+        10,
+        0
+      ],
+      "bedroom": [
+        11,
+        2
+      ],
+      "living_room": [
+        0,
+        2
+      ]
+    },
+    "origin": [
+      0,
+      0
+    ],
+    "holding_penalty": 0.5,
+    "description": "Same batch with holding_penalty 0.5 (any value above ~0.13 flips it): count first, then pick the cup on the way back.",
+    "expect": {
+      "per_command_order": true,
+      "non_goto_preserved": true,
+      "gripper_invariant": true,
+      "go_to_order": [
+        "bedroom",
+        "kitchen",
+        "living_room"
+      ]
+    }
+  },
+  {
+    "name": "dep_count_waits_for_earlier_give",
+    "_comment": "A (issued first): bring the cup from the shelf to the person in the kitchen. B: count the cups in the kitchen, then go to the garage. Sequentially B counts after the handover, so the cup in the person's hand is counted; B's count must follow A's give.",
+    "commands": [
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "shelf"
+        },
+        {
+          "action": "pick_object",
+          "object_to_pick": "cup"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "kitchen"
+        },
+        {
+          "action": "give_object"
+        }
+      ],
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "kitchen"
+        },
+        {
+          "action": "count",
+          "target_to_count": "cups"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "garage"
+        },
+        {
+          "action": "answer_question"
+        }
+      ]
+    ],
+    "coords": {
+      "shelf": [
+        9.7,
+        6.4
+      ],
+      "kitchen": [
+        0.7,
+        0.8
+      ],
+      "garage": [
+        7.5,
+        0.6
+      ]
+    },
+    "origin": [
+      0.1,
+      3.9
+    ],
+    "expect": {
+      "per_command_order": true,
+      "non_goto_preserved": true,
+      "gripper_invariant": true,
+      "conflict_order_preserved": true,
+      "action_before": [
+        [
+          [
+            0,
+            3
+          ],
+          [
+            1,
+            1
+          ]
+        ]
+      ]
+    }
+  },
+  {
+    "name": "holding_penalty_zero_guides_while_holding",
+    "commands": [
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "kitchen"
+        },
+        {
+          "action": "pick_object",
+          "object_to_pick": "cup"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "dining_table"
+        },
+        {
+          "action": "place_object"
+        }
+      ],
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "kitchen"
+        },
+        {
+          "action": "find_person"
+        },
+        {
+          "action": "guide_person_to",
+          "destination_room": "garage"
+        }
+      ]
+    ],
+    "coords": {
+      "kitchen": [
+        0,
+        0
+      ],
+      "garage": [
+        10,
+        0
+      ],
+      "dining_table": [
+        5,
+        3
+      ]
+    },
+    "origin": [
+      0,
+      -1
+    ],
+    "description": "Plain travel: pick the cup, guide the person to the garage with it, then place it: 5.83 m of hops (vs 11.66 m placing first), but the cup is carried 15.83 m instead of 5.83 m.",
+    "expect": {
+      "per_command_order": true,
+      "non_goto_preserved": true,
+      "gripper_invariant": true,
+      "go_to_order": [
+        "kitchen",
+        "dining_table"
+      ],
+      "action_before": [
+        [
+          [
+            1,
+            2
+          ],
+          [
+            0,
+            3
+          ]
+        ]
+      ]
+    }
+  },
+  {
+    "name": "holding_penalty_counts_escorts_while_holding",
+    "commands": [
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "kitchen"
+        },
+        {
+          "action": "pick_object",
+          "object_to_pick": "cup"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "dining_table"
+        },
+        {
+          "action": "place_object"
+        }
+      ],
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "kitchen"
+        },
+        {
+          "action": "find_person"
+        },
+        {
+          "action": "guide_person_to",
+          "destination_room": "garage"
+        }
+      ]
+    ],
+    "coords": {
+      "kitchen": [
+        0,
+        0
+      ],
+      "garage": [
+        10,
+        0
+      ],
+      "dining_table": [
+        5,
+        3
+      ]
+    },
+    "origin": [
+      0,
+      -1
+    ],
+    "holding_penalty": 1.0,
+    "description": "Same batch with holding_penalty 1 (flips above ~0.58): place the cup first, come back and guide. Pricing only the hops would keep the guide-while-holding order, since the 10 m guide itself is inside a segment.",
+    "expect": {
+      "per_command_order": true,
+      "non_goto_preserved": true,
+      "gripper_invariant": true,
+      "go_to_order": [
+        "kitchen",
+        "dining_table",
+        "kitchen"
+      ],
+      "action_before": [
+        [
+          [
+            0,
+            3
+          ],
+          [
+            1,
             1
           ]
         ]
