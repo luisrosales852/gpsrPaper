@@ -2,7 +2,7 @@
 
 from typing import List, Optional, Sequence
 
-from gpsr_merger.merger import _TIEBREAK_EPSILON, _cost_matrix, _Segment
+from gpsr_merger.merger import _cost_matrix, _Segment
 
 
 def heldkarp_schedule(
@@ -42,7 +42,7 @@ def heldkarp_schedule(
             continue
         if needs is not None and needs[seg_cmd[u]][0]:
             continue
-        f[1 << u][u] = seed[u] + _TIEBREAK_EPSILON * seg_cmd[u]
+        f[1 << u][u] = seed[u]
 
     for S in range(1, 1 << M):
         holder = holder_of(S)
@@ -63,7 +63,6 @@ def heldkarp_schedule(
                 cand = (
                     f[S][last]
                     + edge[last][u]
-                    + (_TIEBREAK_EPSILON if seg_cmd[u] != seg_cmd[last] else 0.0)
                 )
                 if cand < f[S | (1 << u)][u]:
                     f[S | (1 << u)][u] = cand

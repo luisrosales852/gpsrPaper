@@ -350,6 +350,7 @@
   "objects": [
     {
       "name": "cup",
+      "site": "counter",
       "kind": "cup",
       "category": "drinkware",
       "at": [
@@ -367,6 +368,7 @@
     },
     {
       "name": "book",
+      "site": "bedroom",
       "kind": "book",
       "category": "object",
       "at": [
@@ -384,6 +386,7 @@
     },
     {
       "name": "apple_1",
+      "site": "side_table",
       "kind": "apple",
       "category": "fruit",
       "at": [
@@ -401,6 +404,7 @@
     },
     {
       "name": "apple_2",
+      "site": "side_table",
       "kind": "apple",
       "category": "fruit",
       "at": [
@@ -418,6 +422,7 @@
     },
     {
       "name": "apple_3",
+      "site": "side_table",
       "kind": "apple",
       "category": "fruit",
       "at": [
@@ -435,6 +440,7 @@
     },
     {
       "name": "orange_1",
+      "site": "side_table",
       "kind": "orange",
       "category": "fruit",
       "at": [
@@ -452,6 +458,7 @@
     },
     {
       "name": "melon_1",
+      "site": "side_table",
       "kind": "melon",
       "category": "fruit",
       "at": [
@@ -469,6 +476,7 @@
     },
     {
       "name": "plate_1",
+      "site": "counter",
       "kind": "plate",
       "category": "dishware",
       "at": [

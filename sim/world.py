@@ -24,6 +24,7 @@ class SimObject:
     size: float
     color: Tuple[float, float, float, float]
     body: str = ""  # MuJoCo body name
+    site: Optional[str] = None
 
 
 @dataclass
@@ -69,6 +70,13 @@ class World:
         with open(path) as f:
             self.spec: Dict[str, Any] = json.load(f)
 
+        if "base" in self.spec:
+            variant = self.spec
+            with open(os.path.join(os.path.dirname(path), variant["base"])) as f:
+                self.spec = json.load(f)
+            self.spec["name"] = variant["name"]
+            self.spec["furniture"].extend(variant["additional_furniture"])
+
         self.bounds = self.spec["bounds"]
         self.zones = self.spec.get("zones", [])
         self.furniture = self.spec.get("furniture", [])
@@ -84,6 +92,7 @@ class World:
             self.objects.append(
                 SimObject(
                     name=o["name"],
+                    site=o.get("site") or self.nearest_site(o["at"]),
                     kind=o.get("kind", o["name"]),
                     category=o.get("category", "object"),
                     home=(float(o["at"][0]), float(o["at"][1]), float(o.get("z", 0.6))),
@@ -108,6 +117,21 @@ class World:
             )
 
     # ---- the merger-facing contract -------------------------------------
+
+    def canonical_site(self, name):
+        pose = self.pose(name)
+        if pose is None:
+            return name
+        return next(key for key, value in self.locations.items() if value == pose)
+
+    def nearest_site(self, xy):
+        return min(self.locations, key=lambda name: self.distance(xy, self.locations[name]))
+
+    def observes_site(self, observation, site):
+        if site is None or observation is None:
+            return False
+        return (_norm(observation) == _norm(site)
+                or _norm(observation) == _norm(self.room_of(site)))
 
     def locator(self, name: str) -> Optional[Tuple[float, float]]:
         """Resolve a free-text location to (x, y), or None if unknown.

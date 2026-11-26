@@ -17,6 +17,7 @@ import json
 import math
 import os
 import sys
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import mujoco
@@ -25,14 +26,14 @@ import py_trees
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from gpsr_merger.bt_builder import ExecutionHooks, RecoveryPolicy, build_tree, render_tree_ascii  # noqa: E402
-from gpsr_merger.merger import InterleavedPlan, merge  # noqa: E402
+from gpsr_merger.merger import InterleavedPlan, PlanAction, merge, replan_remaining  # noqa: E402
 from gpsr_merger.status import Status  # noqa: E402
 from gpsr_merger.timeouts import GLOBAL_BUDGET_S  # noqa: E402
 from sim.compose import compose  # noqa: E402
-from sim.handlers import FAILURE_REPORT_S, SimSubtaskHandler  # noqa: E402
+from sim.handlers import DURATION, FAILURE_REPORT_S, SimSubtaskHandler  # noqa: E402
 from sim.mjcf import build_xml  # noqa: E402
 from sim.recorder import Recorder  # noqa: E402
-from sim.robot import SimRobot  # noqa: E402
+from sim.robot import LIN_SPEED, SimRobot  # noqa: E402
 from sim.routing import VisGraphRouter  # noqa: E402
 from sim.world import World  # noqa: E402
 from tests._merger_helpers import build_commands, describe_plan, planned_travel  # noqa: E402
@@ -94,27 +95,47 @@ def start_name(world: World, origin: Optional[Tuple[float, float]]) -> Optional[
 
 
 def _plan(world, commands, origin, args):
+    for command in commands:
+        for action in command.commands:
+            for field in ("location_to_go", "destination", "destination_room"):
+                name = getattr(action, field, None)
+                if name:
+                    setattr(action, field, world.canonical_site(name))
     distance = merger_distance(world, planning_router(world), origin)
     origin_name = start_name(world, origin)
     plan = merge(
         commands, origin=origin, distance=distance, room_of=world.room_of,
         origin_name=origin_name, holding_penalty=getattr(args, "holding_penalty", 0.0),
         navigation_overhead=getattr(args, "navigation_overhead", 0.0),
+        skill_durations_s=None if getattr(args, "travel_exposure_only", False) else DURATION,
+        speed_m_s=LIN_SPEED, greedy=getattr(args, "greedy", False),
     )
     return plan, distance, origin_name
 
 
-def sequential_plan(plan: InterleavedPlan) -> InterleavedPlan:
+def sequential_plan(plan: InterleavedPlan, return_between=False, recover_navigation=False) -> InterleavedPlan:
     """The per-command baseline, straight out of ``merge()``.
 
     ``plan.fallback`` is already the original sequence of each command, so the
     baseline needs no new scheduling code: same executor, same handlers, same
     world — only the ordering differs, which is exactly the claim under test.
     """
-    actions = [pa for per_cmd in plan.fallback for pa in per_cmd]
+    per_command = []
+    for cmd, sequence in enumerate(plan.fallback):
+        actions = list(sequence)
+        if return_between and cmd + 1 < len(plan.fallback):
+            if plan.origin_name is None:
+                raise ValueError("one-by-one requires a named instruction point")
+            idx = max((pa.source_idx for pa in sequence), default=-1) + 1
+            action = SimpleNamespace(action="go_to", location_to_go=plan.origin_name)
+            actions.append(PlanAction(action, cmd, idx, plan.origin_name, False, False,
+                                      purpose="operator-return", navigation_goals=((cmd, idx),)))
+        per_command.append(actions)
+    actions = [pa for sequence in per_command for pa in sequence]
     if actions and actions[0].source_idx == -1:
         actions = actions[1:]  # the robot already stands on the start
-    return InterleavedPlan(actions=actions, fallback=[], origin_name=plan.origin_name)
+    return InterleavedPlan(actions=actions, fallback=per_command if recover_navigation else [],
+                           origin_name=plan.origin_name)
 
 
 def run_once(sc: dict, mode: str, out_dir: str, args) -> dict:
@@ -123,7 +144,9 @@ def run_once(sc: dict, mode: str, out_dir: str, args) -> dict:
     commands = build_commands(sc["commands"])
 
     plan, distance, origin_name = _plan(world, commands, origin, args)
-    exec_plan = sequential_plan(plan) if mode == "sequential" else plan
+    exec_plan = (sequential_plan(plan, return_between=mode == "one-by-one",
+                                 recover_navigation=getattr(args, "ordering_baseline", False))
+                 if mode in ("sequential", "one-by-one") else plan)
     policy = getattr(args, "recovery_policy", None) or (
         RecoveryPolicy.SKIP_DEFER if mode == "merged" else RecoveryPolicy.SEQUENTIAL_FALLBACK
     )
@@ -151,7 +174,7 @@ def run_once(sc: dict, mode: str, out_dir: str, args) -> dict:
         failures.setdefault(key, []).extend([Status.EXECUTION_ERROR] * int(n or 1))
 
     handler = SimSubtaskHandler(world, robot, recorder=rec, failures=failures,
-                                router=VisGraphRouter(world))
+                                router=VisGraphRouter(world), skill_model=getattr(args, "skill_model", None))
     return_start = {}
 
     def on_phase(phase):
@@ -167,6 +190,17 @@ def run_once(sc: dict, mode: str, out_dir: str, args) -> dict:
         return_start["finished_t"] = robot.t
         return reached
 
+    def replan(pending, holder):
+        router = VisGraphRouter(world, [robot.person_xy(p) for p in world.people])
+        return replan_remaining(
+            pending, distance=merger_distance(world, router, robot.xy), origin=robot.xy,
+            origin_name=start_name(world, robot.xy), initial_holder=holder,
+            room_of=world.room_of,
+            skill_durations_s=None if getattr(args, "travel_exposure_only", False) else DURATION,
+            speed_m_s=LIN_SPEED, holding_penalty=getattr(args, "holding_penalty", 0.0),
+            navigation_overhead=getattr(args, "navigation_overhead", 0.0),
+        )
+
     root = build_tree(
         exec_plan,
         subtask_handlers=[handler],
@@ -179,6 +213,7 @@ def run_once(sc: dict, mode: str, out_dir: str, args) -> dict:
         execution_hooks=ExecutionHooks(
             clock=lambda: robot.t, deadline=args.budget,
             set_action_deadline=handler.set_action_deadline,
+            replan=replan if getattr(args, "replan", False) else None,
             gripper_state=handler.gripper_state, on_phase=on_phase,
             room_of=world.room_of,
             estimate_deferred=lambda steps: handler.estimate_deferred(steps, home),
@@ -221,6 +256,10 @@ def run_once(sc: dict, mode: str, out_dir: str, args) -> dict:
         "return_distance_m": round(robot.distance_m - return_start["distance_m"], 3),
         "return_finished_s": round(return_start.get("finished_t", return_start["t"]), 3),
         "work_distance_m": round(return_start["distance_m"], 3),
+        "holding_time_s": round(robot.holding_time_s, 3),
+        "replans": root.replans,
+        "people_xy": {p.name: robot.person_xy(p) for p in world.people},
+        "object_sites": {obj.name: obj.site for obj in world.objects},
         "failures": [
             {"cmd": f.action.source_cmd, "idx": f.action.source_idx,
              "kind": f.action.action.action, "status": f.status.name, "phase": f.phase,
@@ -270,6 +309,8 @@ def main() -> int:
     ap.add_argument("--no-video", action="store_true", help="event log only, no rendering")
     ap.add_argument("--print-tree", action="store_true")
     ap.add_argument("--dry-run", action="store_true", help="print the merged order and exit")
+    ap.add_argument("--replan", action="store_true", help="re-solve remaining work after an exhausted failure")
+    ap.add_argument("--travel-exposure-only", action="store_true", help="omit occupied skill dwell from the objective")
     ap.add_argument("--holding-penalty", type=float, default=0.0,
                     help="extra cost per metre driven while holding (paper's lambda)")
     ap.add_argument("--navigation-overhead", type=float, default=0.0, metavar="METRES",

@@ -49,12 +49,15 @@ def _f(command: Any, field: str, default=None):
 class SimSubtaskHandler:
     def __init__(self, world: World, robot: SimRobot, recorder=None,
                  failures: Optional[Dict[str, List[Status]]] = None,
-                 router: Optional[Router] = None):
+                 router: Optional[Router] = None, skill_model=None):
         self.world = world
+        self.skill_model = skill_model
+        self.minimum_finish = None
         self.robot = robot
         self.router = router if router is not None else VisGraphRouter(world)
         self.recorder = recorder
         self.failures = dict(failures or {})
+        self.site = world.nearest_site(robot.xy)
         self.current = None              # PlanAction, set by on_action_start
         self.locked: Dict[int, SimPerson] = {}   # per source command
         self.results: Dict[int, Dict[int, str]] = {}
@@ -184,6 +187,10 @@ class SimSubtaskHandler:
         self.robot.deadline = skill_deadline
 
     def _end(self, status: Status, result=None) -> Tuple[Status, Any]:
+        if status == Status.EXECUTION_SUCCESS and self.minimum_finish is not None:
+            wait = self.minimum_finish - self.robot.t
+            if wait > DT / 2:
+                self.robot.idle(wait)
         self.robot.deadline = None
         kind = getattr(getattr(self.current, "action", None), "action", "")
         if (status == Status.EXECUTION_SUCCESS and result is not None
@@ -232,9 +239,17 @@ class SimSubtaskHandler:
     # ---- guard shared by all 13 leaves -----------------------------------
 
     def _run(self, kind: str, body):
+        self.minimum_finish = None
         injected = self._injected(kind)
         self._begin(kind)
         try:
+            if self.skill_model is not None:
+                ok, duration = self.skill_model.sample(self.cmd_idx, self.current.source_idx, kind)
+                if not ok:
+                    self.robot.idle(0.6 if duration is None else duration)
+                    return self._end(Status.EXECUTION_ERROR, None)
+                if duration is not None:
+                    self.minimum_finish = self.robot.t + duration
             if injected is not None:
                 self.robot.idle(0.6)
                 return self._end(injected, None)
@@ -258,6 +273,7 @@ class SimSubtaskHandler:
                 self.robot.idle(0.5)
                 return self._end(Status.EXECUTION_ERROR, None)
             self.robot.drive_path(path, yaw=pose[2])
+            self.site = name
             return self._end(Status.EXECUTION_SUCCESS, name)
         return self._run("go_to", body)
 
@@ -268,7 +284,7 @@ class SimSubtaskHandler:
                 # Single-item invariant, enforced by the executor.
                 return self._end(Status.EXECUTION_ERROR, None)
             obj = self.world.find_object(name)
-            if obj is None:
+            if obj is None or not self.world.observes_site(self.site, obj.site):
                 self.robot.idle(0.5)
                 return self._end(Status.TARGET_NOT_FOUND, None)
             oxyz = self.robot.object_xyz(obj)
@@ -287,6 +303,7 @@ class SimSubtaskHandler:
                 self.robot.drive_path(path)
             self._face(oxyz[:2])
             self.robot.grasp(obj)
+            obj.site = None
             self.robot.idle(DURATION["pick_object"] * 0.4)
             return self._end(Status.EXECUTION_SUCCESS, obj.kind)
         return self._run("pick_object", body)
@@ -300,6 +317,7 @@ class SimSubtaskHandler:
             yaw = self.robot.yaw
             drop = (x + 0.65 * math.cos(yaw), y + 0.65 * math.sin(yaw), 0.75)
             self.robot.release(drop)
+            obj.site = self.site
             self.robot.idle(DURATION["place_object"] * 0.5)
             return self._end(Status.EXECUTION_SUCCESS, obj.kind)
         return self._run("place_object", body)
@@ -316,6 +334,7 @@ class SimSubtaskHandler:
             px, py = self.robot.person_xy(person)
             self._face((px, py))
             self.robot.release((px, py, 1.05))
+            obj.site = self.site
             self._say(f"Here is the {obj.kind}, {person.name}.", anchor="robot",
                       hold=DURATION["give_object"])
             return self._end(Status.EXECUTION_SUCCESS, f"{obj.kind} to {person.name}")
@@ -383,6 +402,7 @@ class SimSubtaskHandler:
             lead_in = [self.robot.xy] + reach[:-1] + [start]
             self.robot.follow_person(person, lead_in + walk,
                                      person_from=path_length(lead_in[0], lead_in[1:]))
+            self.site = dest
             return self._end(Status.EXECUTION_SUCCESS, dest)
         return self._run("follow_person_until", body)
 
@@ -406,15 +426,28 @@ class SimSubtaskHandler:
             lead_in = [start] + join[:-1] + [self.robot.xy]
             self.robot.lead_person(person, lead_in + drive,
                                    robot_from=path_length(lead_in[0], lead_in[1:]))
+            self.site = dest
             return self._end(Status.EXECUTION_SUCCESS, dest)
         return self._run("guide_person_to", body)
+
+    def _visible_objects(self, target):
+        return [obj for obj in self.world.objects_matching(target)
+                if self.world.observes_site(self.site, obj.site)
+                and self._near(self.robot.object_xyz(obj)[:2], SENSE_RADIUS)]
 
     def count(self, command) -> Tuple[Status, Any]:
         def body():
             target = _f(command, "target_to_count", "")
             self.robot.scan(duration=DURATION["count"])
-            hits = [o for o in self.world.objects_matching(target)
-                    if self._near(self.robot.object_xyz(o)[:2], SENSE_RADIUS)]
+            words = target.lower().split()
+            people = {"people", "persons", "person"}
+            if people.intersection(words):
+                attribute = " ".join(word for word in words if word not in people)
+                hits = [p for p in self._people_in_range()
+                        if self.world.observes_site(self.site, self.world.nearest_site(self.robot.person_xy(p)))
+                        and (not attribute or any(attribute in attr.lower() for attr in p.attributes))]
+            else:
+                hits = self._visible_objects(target)
             self.robot.badges = [
                 {"body": o.body, "text": str(i + 1), "color": (250, 210, 60)}
                 for i, o in enumerate(hits)
@@ -429,8 +462,7 @@ class SimSubtaskHandler:
             measure = str(_f(command, "measure", "biggest")).lower()
             category = _f(command, "object_category", "object")
             self.robot.scan(duration=DURATION["get_visual_info"])
-            hits = [o for o in self.world.objects_matching(category)
-                    if self._near(self.robot.object_xyz(o)[:2], SENSE_RADIUS)]
+            hits = self._visible_objects(category)
             if not hits:
                 return self._end(Status.TARGET_NOT_FOUND, None)
             reverse = measure in ("biggest", "largest", "heaviest", "tallest")

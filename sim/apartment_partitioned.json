@@ -1,0 +1,10 @@
+{
+  "base": "apartment.json",
+  "name": "partitioned_loft",
+  "additional_furniture": [
+    {"name": "kitchen_partition", "rect": [1.95, 0.5, 2.10, 3.25],
+     "h": 1.2, "color": [0.68, 0.65, 0.60, 1]},
+    {"name": "bedroom_partition", "rect": [-2.45, 0.75, -2.30, 3.25],
+     "h": 1.2, "color": [0.68, 0.65, 0.60, 1]}
+  ]
+}

@@ -158,6 +158,7 @@ class Recorder:
     def action_start(self, plan_action, robot) -> None:
         key = (plan_action.source_cmd, plan_action.source_idx)
         self.current = key
+        self._sites_at_start = {o.name: o.site for o in self.world.objects}
         kind = getattr(plan_action.action, "action", "?")
         self.leaf_line = f"ActionLeaf({kind})"
         robot.set_shell_color(cmd_rgba(plan_action.source_cmd))
@@ -184,6 +185,8 @@ class Recorder:
             "cmd": key[0], "idx": key[1],
             "purpose": plan_action.purpose,
             "status": getattr(status, "name", str(status)),
+            "site_changes": {o.name: o.site for o in self.world.objects
+                             if o.site != self._sites_at_start[o.name]},
             "result": None if result is None else str(result),
             "x": round(x, 3), "y": round(y, 3),
             "held": robot.held.kind if robot.held else None,

@@ -155,11 +155,11 @@ def _interleaved(log):
     return any(cmd != work[i - 1] and cmd in work[:i] for i, cmd in enumerate(work) if i)
 
 
-def _run(trial, policy, directory, mode="merged"):
+def _run(trial, policy, directory, mode="merged", replan=False):
     args = argparse.Namespace(
         apartment=str(Path(HERE) / "apartment.json"), width=832, height=720,
         fps=30, speed=3.0, camera="topdown", retries=2, budget=GLOBAL_BUDGET_S,
-        fail=trial.failures, no_video=True, print_tree=False, recovery_policy=policy,
+        fail=trial.failures, no_video=True, print_tree=False, recovery_policy=policy, replan=replan,
     )
     run_once(trial.scenario(), mode, str(directory), args)
     log = json.loads((directory / "run.json").read_text())
@@ -168,20 +168,20 @@ def _run(trial, policy, directory, mode="merged"):
     return log, _score(trial, log, world)
 
 
-def run_trials(out):
+def run_trials(out, replan=False):
     out.mkdir(parents=True, exist_ok=True)
     _, baseline = _run(TRIALS[0], RecoveryPolicy.SEQUENTIAL_FALLBACK, out / "nominal-back-to-back",
                        mode="sequential")
     rows = []
     for trial in TRIALS:
         for policy in RecoveryPolicy:
-            log, score = _run(trial, policy, out / trial.name / policy.value)
+            log, score = _run(trial, policy, out / trial.name / policy.value, replan=replan)
             meaningful = (trial.name == "nominal" and _interleaved(log)
                           and score["completed_goals"] == 3 and score["returned"]
                           and baseline["completed_goals"] == 3 and baseline["returned"]
                           and (score["elapsed_s"] < baseline["elapsed_s"]
                                or score["distance_m"] < baseline["distance_m"]))
-            rows.append({"trial": trial.name, "policy": policy.value, **score,
+            rows.append({"trial": trial.name, "policy": policy.value, "replan": replan, **score,
                          "plan_demonstration_observed": False,
                          "simulated_bonus_evidence": meaningful,
                          "competition_bonus_awarded": None})
@@ -193,7 +193,9 @@ def run_trials(out):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, default=Path("out/recovery"))
-    for row in run_trials(parser.parse_args().out):
+    parser.add_argument("--replan", action="store_true")
+    args = parser.parse_args()
+    for row in run_trials(args.out, args.replan):
         print(f"{row['trial']:30} {row['policy']:20} {row['completed_goals']}  "
               f"{row['partial_credit']:.1f}  {row['elapsed_s']:6.1f}  "
               f"{row['distance_m']:5.1f}  {row['goals_recovered_by_defer']}  "

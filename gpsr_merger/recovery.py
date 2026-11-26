@@ -10,7 +10,7 @@ import py_trees
 
 from gpsr_merger.leaf_behaviours import _dispatch, _resolve_method, fallback_order
 from gpsr_merger.merger import (
-    PlanAction, RoomFn, _action_effects, _kind, _norm_location, _places_overlap,
+    InfeasibleResidual, PlanAction, RoomFn, _action_effects, _kind, _norm_location, _places_overlap,
 )
 from gpsr_merger.status import Status
 from gpsr_merger.timeouts import timeout_for
@@ -46,6 +46,7 @@ class ExecutionHooks:
     failure_report_s: float = 0.0
     on_phase: Optional[Callable[[str], None]] = None
     room_of: Optional[RoomFn] = None
+    replan: Optional[Callable[[Sequence[Sequence[PlanAction]], Optional[int]], Sequence[PlanAction]]] = None
 
 
 OK = Status.EXECUTION_SUCCESS
@@ -196,6 +197,8 @@ class ExecutionTree(py_trees.composites.Sequence):
             self.deadline = self.hooks.clock() + self._budget
         self.failures = []
         self.completed = set()
+        self.unreachable = set()
+        self.replans = []
         self.skipped = {}
         self._writes = []
         self._place = _norm_location(self._requirements.start)
@@ -289,11 +292,62 @@ class ExecutionTree(py_trees.composites.Sequence):
                 self._gripper = GripperState.UNCERTAIN
                 if self._gripper_state() == GripperState.EMPTY:
                     self._holder = None
-        if status == OK and pa.purpose in ("plan", "deferred"):
+        if status == OK and pa.purpose in ("plan", "deferred", "operator-return"):
             self.completed.add(_key(pa))
             self.skipped.pop(_key(pa), None)
         yield
         return status
+
+    def _remaining_commands(self, tail):
+        """Restore segment entry drives after shared navigation was collapsed."""
+        count = len(self._plan.fallback)
+        remaining = [[] for _ in range(count)]
+        places = [None] * count
+        blocked = {_key(f.action) for f in self.failures} | set(self.skipped)
+        # A failed release can strand an object. Keep independent information
+        # work in the residual optimization even when no pick is possible.
+        stranded = self._holder is not None and not any(
+            pa.releases_gripper and (pick := self._requirements.by_action[_key(pa)].pick)
+            and _key(pick) == self._holder and _key(pa) not in blocked
+            for pa in tail
+        )
+        for pa in tail:
+            cmd = pa.source_cmd
+            key = _key(pa)
+            kind = _kind(pa.action)
+            if kind == "go_to":
+                # A collapsed drive can satisfy multiple standalone navigation goals.
+                if _norm_location(pa.location) in self.unreachable:
+                    continue
+                goals = pa.navigation_goals
+                if not goals and key in self._requirements.nav_goals:
+                    goals = (key,)
+                for owner, idx in goals:
+                    remaining[owner].append(replace(pa, source_cmd=owner, source_idx=idx,
+                                                    navigation_goals=((owner, idx),)))
+                    places[owner] = pa.location
+                continue
+            needs = self._requirements.by_action[key]
+            if (key in blocked or (stranded and (pa.requires_gripper or pa.releases_gripper))
+                    or _norm_location(needs.place) in self.unreachable
+                    or any(_key(dep) in blocked for dep in needs.dependencies)
+                    or (needs.navigation and _key(needs.navigation) in blocked
+                        and _kind(needs.navigation.action) in ESCORT)):
+                self.skipped[key] = "unavailable after failure"
+                blocked.add(key)
+                continue
+            if self._done(pa):
+                continue
+            if needs.place and needs.place != places[cmd]:
+                drive = needs.navigation
+                if drive is None or _kind(drive.action) != "go_to":
+                    drive = replace(_goto(needs.place, cmd), purpose="replan-drive")
+                remaining[cmd].append(drive)
+                places[cmd] = needs.place
+            remaining[cmd].append(pa)
+            if kind in ESCORT:
+                places[cmd] = _action_effects(pa.action, needs.place)[2]
+        return remaining
 
     def _run_order(self, actions, resume=False):
         sequential = self.policy == RecoveryPolicy.SEQUENTIAL_FALLBACK
@@ -302,6 +356,9 @@ class ExecutionTree(py_trees.composites.Sequence):
                 return False
             kind = _kind(pa.action)
             if kind == "go_to":
+                if _norm_location(pa.location) in self.unreachable:
+                    self.skipped[_key(pa)] = "destination unreachable"
+                    continue
                 if (resume or (not sequential and (self.failures or self.skipped))) and not self._nav_needed(
                     pa, actions[i + 1:], resume
                 ):
@@ -331,6 +388,23 @@ class ExecutionTree(py_trees.composites.Sequence):
             if status == OK:
                 continue
             self.failures.append(RecoveryFailure(pa, status, self._phase, len(self._writes)))
+            if (not sequential and not resume and self.hooks.replan
+                    and self._plan.fallback and self._remaining() > 0):
+                if kind == "go_to":
+                    self.unreachable.add(_norm_location(pa.location))
+                state = self._gripper_state()
+                if state == GripperState.EMPTY or (state == GripperState.OCCUPIED and self._holder):
+                    holder = self._holder[0] if state == GripperState.OCCUPIED else None
+                    pending = self._remaining_commands(actions[i + 1:])
+                    try:
+                        revised = self.hooks.replan(pending, holder)
+                    except InfeasibleResidual:
+                        # Existing dependency and gripper guards still apply to the original tail.
+                        continue
+                    self.replans.append({"after": _key(pa), "holder": holder,
+                                         "remaining_s": self._remaining(),
+                                         "order": [_key(step) for step in revised]})
+                    return (yield from self._run_order(revised))
             if not resume and (sequential or kind == "go_to"):
                 return False
         return True
@@ -432,6 +506,9 @@ class ExecutionTree(py_trees.composites.Sequence):
             self._set_phase("deferred")
             for failure in self._pending_information:
                 steps = self._restoration(failure)
+                if steps is not None and any(_norm_location(step.location) in self.unreachable
+                                             for step in steps if _kind(step.action) == "go_to"):
+                    steps = None
                 if steps is None:
                     failure.deferred = "ineligible"
                     continue

@@ -36,6 +36,48 @@ python3 run_scenarios.py -v    # also print the merged ordering per scenario
 pip install -r requirements.txt   # py_trees==2.2.3
 ```
 
+### Testing against the original paper
+
+Use `git show 8e77cd4:main.tex` to read the earliest paper in this repository.
+The copy on `origin/main` at the time of the comparison has the same contents.
+The Objective subsection and Proposition 1 give a testable claim for a
+failure-free batch. The merger should return a feasible order with the lowest
+modeled cost among all orders of its atomic segments.
+
+```sh
+.venv/bin/python -m pytest -q tests/test_paper_objective.py
+.venv/bin/python run_scenarios.py
+.venv/bin/python -m pytest -q
+```
+
+The first check enumerates all 720 orders of six segments from three commands.
+It encodes the two issue-order conflicts explicitly, replays gripper ownership
+and scores each feasible order in seconds. The test calls the public `merge()`
+and checks its emitted drives and skills as well as its cost. Two layouts and
+four settings exercise navigation overhead, carrying while driving or escorting,
+and carrying during stationary skills. Any minimum-cost feasible order passes.
+The API takes navigation overhead in metres, so the test passes `speed_m_s * κ`
+for an overhead of κ seconds.
+
+For an execution check with the simulation dependencies installed, run
+`python -m sim.benchmark run scenarios/benchmark_2027.json --rates 0 --repeats 1 --out out/paper-nominal`.
+Compare completed goals, elapsed time and distance for the same batch and layout
+in `results.json`. This is a pilot with eight batches, two simulated layouts
+and zero injected failures.
+
+The original skill table gives person-finding skills a shared attention write
+and person-info a shared attention read. The merger can find Angel, find Tom for
+another command, then ask for Angel's pose. The simulator answers “sitting”
+from Angel's per-command identity. In an offline replay of the `home2` adapter
+at `5aec4cd14`, with the camera still seeing Tom, the same query returned
+“standing”. The adapter queries the current vision feed by attribute. The
+sequential control returned “sitting” in both. To reproduce the scheduler
+discrepancy, run the strict expected failure as an ordinary assertion:
+
+```sh
+.venv/bin/python -m pytest --runxfail -q tests/test_paper_objective.py -k person_attention
+```
+
 ## How this was extracted
 
 Copied from `home2` (branch `qwenUpgrade`) and ported with exactly two import
@@ -226,3 +268,106 @@ symptom traced to upstream LLM decomposition, not to this code.
 - Two authors touched the folder:
   - `2965c2043` Added gpsr command merging (#937) — Luis Alvaro Rosales Salazar
   - `75c28b966` Gpsr/robocup (#1119) — Gilberto Malagamba Montejo
+
+## Paper extensions and paired benchmark
+
+The seven historical cases remain available through `python -m sim.recovery_trials`.
+For a paired rerun with residual planning enabled, add `--replan --out out/recovery-replan`.
+The flag also works in `sim.run_sim`. It extends the two local recovery policies.
+After an exhausted failure, the executor removes unavailable work, restores the
+entry drives for the surviving segments and solves again from the measured
+pose and verified holder. The original action indices and the running deadline
+survive each solve. An exhausted navigation failure excludes that destination
+for the rest of the batch. The resulting order is recorded under `summary.replans`.
+An uncertain gripper keeps the existing recovery guards in effect.
+
+The planner accepts `skill_durations_s` and `speed_m_s`. It adds
+`holding_penalty × speed_m_s × occupied_skill_seconds` to the distance objective.
+The estimate treats grasp and release as changes at action completion.
+Unoccupied constant skill durations cancel between complete schedules. The
+simulator supplies nominal dwell estimates and logs measured `holding_time_s`
+from the physical gripper state. The full numerical objective takes priority over
+the historical command-order tie preference. Use `--holding-penalty 0.5` with
+`sim.benchmark run` to enable the exposure cost. Add `--travel-exposure-only`
+to isolate the effect of stationary dwell at the same weight.
+
+Object counts and visual comparisons refer to a named fixture, or to fixtures
+within the requested room. Objects have a semantic site as well as a physical
+pose. Picking removes the object from its site and release assigns the new site.
+Sensor range still limits visibility. The count handler also accepts people and
+pose descriptions such as “standing people”.
+
+### Reproduce the comparison
+
+With the simulation dependencies installed, the checked-in manifest runs offline.
+
+```sh
+python -m sim.benchmark run scenarios/benchmark_2027.json --repeats 2 --out out/benchmark/study
+python -m sim.stochastic scenarios/benchmark_2027.json --out out/benchmark/oracle-open.json
+python -m sim.stochastic scenarios/benchmark_2027.json --apartment sim/apartment_partitioned.json --out out/benchmark/oracle-partitioned.json
+```
+
+The manifest has eight three-command batches sampled from four supported goal
+families in the official grammar. It records the generator revision, seed,
+template bindings, original text, spoken text, rephrasings, parsed actions and
+independent expected goals. A small English grammar handles the default
+utterances. To generate fresh batches from a checkout of the official generator:
+
+```sh
+python -m sim.benchmark generate --generator ../CommandGenerator --seed 2028 --batches 16 --output out/benchmark/new.json
+```
+
+An optional `--language-adapter PATH` runs an executable that reads a JSON
+request on stdin and writes JSON on stdout. Operation `rephrase` receives
+`text` and `seed` and returns up to three strings. Operation `parse` receives
+only the selected text and returns the GPSR action list. Keep the model version
+and prompt fixed in the adapter. Generated manifests preserve its file hash,
+phrasing choices and outputs. The included run used the grammar with the
+original utterances.
+
+Each batch runs in an open apartment and a partitioned variant under one-by-one
+(with operator returns), back-to-back, greedy, all three historical merged
+policies, and skip-and-defer with residual planning. The first three orderings
+share skip-only recovery. One-by-one models the inter-command drive, with zero
+speech acquisition time. A keyed draw for each original command, action, skill
+and attempt pairs faults across methods. The default sweep uses 0%, 10%, 20%
+and 40% per-attempt failure probabilities. The simulator measures deliveries
+and escorts in the final world state, checks named handovers and checks the
+actual report at the operator. For a count, the scorer replays the object-site
+changes earlier commands actually achieved in issue order. The manifest also
+retains the nominal expected answer. Each solved goal earns one pilot unit and a
+verified intermediate goal earns half a unit. The bonus-evidence metric also
+requires a completed baseline and a time or distance saving. Official
+competition points require a referee's score sheet.
+
+Each run writes its event log. `results.json` contains paired rows and
+mean/sample standard deviation by method and rate, including distance, time,
+occupied time, goal units and observed gripper/context violations. To fit an
+empirical model, provide a JSON array of individual skill attempts with
+`skill`, boolean `success` and `duration_s`, including failures:
+
+```sh
+python -m sim.benchmark fit robot-attempts.json --output out/benchmark/skills.json
+python -m sim.benchmark run scenarios/benchmark_2027.json --skills out/benchmark/skills.json --rates 0 --out out/benchmark/calibrated
+```
+
+The fitted model uses empirical per-skill failure frequencies and resamples
+durations conditional on outcome. In MuJoCo, successful duration has a floor
+set by the physical trajectory. The supplied rate applies to unobserved skills.
+
+### Stochastic reference model
+
+`sim.stochastic` compares exact backward induction to choosing a segment under
+the assumption of future success and resolving after each outcome. Both
+policies see the same dependencies, gripper state, one-second clock, routes,
+skill durations and partial-goal rewards. The objective is expected elapsed
+seconds minus `--seconds-per-goal` times pilot units. It includes the terminal
+return or time up to the deadline. Skills within a segment execute in order,
+information actions can retry once, and an exhausted failure drops the
+remaining command. A failed release retains the holder. At the deadline an
+unfinished segment earns no new credit. Navigation in this abstract model is
+deterministic. The model treats success as satisfying the corresponding
+abstract task. Its optimal value bounds policies in this model. Physical
+execution, local deferral, semantic observation errors and competition points
+are evaluated separately. Use `--skills` to supply fitted outcome and duration
+distributions to this comparison.

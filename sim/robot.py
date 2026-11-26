@@ -45,6 +45,7 @@ class SimRobot:
         self.t = 0.0
         self.deadline: Optional[float] = None
         self.distance_m = 0.0
+        self.holding_time_s = 0.0
         self.held: Optional[SimObject] = None
         self.on_tick: Optional[Callable[["SimRobot"], None]] = None
         self.speech: Optional[str] = None      # current speech-bubble text
@@ -140,6 +141,7 @@ class SimRobot:
         self.t += dt
         self.sync()
         if self.held is not None:
+            self.holding_time_s += dt
             gp = self.d.site_xpos[self._site_gripper]
             self.set_object_xyz(self.held, float(gp[0]), float(gp[1]), float(gp[2]))
             self.sync()

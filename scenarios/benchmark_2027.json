@@ -1,0 +1,888 @@
+{
+  "generator_revision": "fa8b9adf52c876042b81b7dbfd0e50fc00ef5cc6",
+  "seed": 2027,
+  "parser": "four-family English grammar v1",
+  "apartment_sha256": "d75249316242c6f32a672810410c944e01c91dabb4667cad4d0a346d5f5ddc8f",
+  "batches": [
+    {
+      "name": "batch-0000",
+      "records": [
+        {
+          "template": "takeObjFromPlcmt",
+          "followup": "placeObjOnPlcmt",
+          "slots": {
+            "obj_singCat": "cup",
+            "plcmtLoc": "counter",
+            "plcmtLoc2": "bookshelf"
+          },
+          "goal": {
+            "type": "delivery",
+            "object": "cup",
+            "source": "counter",
+            "goal": "bookshelf"
+          },
+          "utterance": "take a cup from the counter and place it on the bookshelf",
+          "rephrasings": [],
+          "spoken": "take a cup from the counter and place it on the bookshelf",
+          "actions": [
+            {
+              "action": "go_to",
+              "location_to_go": "counter"
+            },
+            {
+              "action": "pick_object",
+              "object_to_pick": "cup"
+            },
+            {
+              "action": "go_to",
+              "location_to_go": "bookshelf"
+            },
+            {
+              "action": "place_object"
+            }
+          ]
+        },
+        {
+          "template": "countObjOnPlcmt",
+          "followup": null,
+          "slots": {
+            "plurCat": "cups",
+            "plcmtLoc": "bookshelf"
+          },
+          "goal": {
+            "type": "report",
+            "site": "bookshelf",
+            "target": "cups",
+            "answer": "1 cups"
+          },
+          "utterance": "tell me how many cups there are on the bookshelf",
+          "rephrasings": [],
+          "spoken": "tell me how many cups there are on the bookshelf",
+          "actions": [
+            {
+              "action": "go_to",
+              "location_to_go": "bookshelf"
+            },
+            {
+              "action": "count",
+              "target_to_count": "cups"
+            },
+            {
+              "action": "go_to",
+              "location_to_go": "start_location"
+            },
+            {
+              "action": "say_with_context",
+              "user_instruction": "cups"
+            }
+          ]
+        },
+        {
+          "template": "guideNameFromBeacToBeac",
+          "followup": null,
+          "slots": {
+            "name": "Maria",
+            "loc": "entrance",
+            "loc_room": "garage"
+          },
+          "goal": {
+            "type": "escort",
+            "person": "Maria",
+            "source": "entrance",
+            "goal": "garage"
+          },
+          "utterance": "escort Maria from the entrance to the garage",
+          "rephrasings": [],
+          "spoken": "escort Maria from the entrance to the garage",
+          "actions": [
+            {
+              "action": "go_to",
+              "location_to_go": "entrance"
+            },
+            {
+              "action": "find_person_by_name",
+              "name": "Maria"
+            },
+            {
+              "action": "guide_person_to",
+              "destination_room": "garage"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "batch-0001",
+      "records": [
+        {
+          "template": "takeObjFromPlcmt",
+          "followup": "deliverObjToNameAtBeac",
+          "slots": {
+            "obj_singCat": "book",
+            "plcmtLoc": "bedroom",
+            "name": "Angel",
+            "room": "living_room"
+          },
+          "goal": {
+            "type": "handover",
+            "object": "book",
+            "source": "bedroom",
+            "person": "Angel",
+            "goal": "living_room"
+          },
+          "utterance": "take a book from the bedroom and bring it to Angel in the living room",
+          "rephrasings": [],
+          "spoken": "take a book from the bedroom and bring it to Angel in the living room",
+          "actions": [
+            {
+              "action": "go_to",
+              "location_to_go": "bedroom"
+            },
+            {
+              "action": "pick_object",
+              "object_to_pick": "book"
+            },
+            {
+              "action": "go_to",
+              "location_to_go": "living_room"
+            },
+            {
+              "action": "find_person_by_name",
+              "name": "Angel"
+            },
+            {
+              "action": "give_object"
+            }
+          ]
+        },
+        {
+          "template": "countObjOnPlcmt",
+          "followup": null,
+          "slots": {
+            "plurCat": "books",
+            "plcmtLoc": "side_table"
+          },
+          "goal": {
+            "type": "report",
+            "site": "side_table",
+            "target": "books",
+            "answer": "0 books"
+          },
+          "utterance": "tell me how many books there are on the side table",
+          "rephrasings": [],
+          "spoken": "tell me how many books there are on the side table",
+          "actions": [
+            {
+              "action": "go_to",
+              "location_to_go": "side_table"
+            },
+            {
+              "action": "count",
+              "target_to_count": "books"
+            },
+            {
+              "action": "go_to",
+              "location_to_go": "start_location"
+            },
+            {
+              "action": "say_with_context",
+              "user_instruction": "books"
+            }
+          ]
+        },
+        {
+          "template": "guideNameFromBeacToBeac",
+          "followup": null,
+          "slots": {
+            "name": "Tom",
+            "loc": "bookshelf",
+            "loc_room": "office"
+          },
+          "goal": {
+            "type": "escort",
+            "person": "Tom",
+            "source": "bookshelf",
+            "goal": "office"
+          },
+          "utterance": "escort Tom from the bookshelf to the office",
+          "rephrasings": [],
+          "spoken": "escort Tom from the bookshelf to the office",
+          "actions": [
+            {
+              "action": "go_to",
+              "location_to_go": "bookshelf"
+            },
+            {
+              "action": "find_person_by_name",
+              "name": "Tom"
+            },
+            {
+              "action": "guide_person_to",
+              "destination_room": "office"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "batch-0002",
+      "records": [
+        {
+          "template": "takeObjFromPlcmt",
+          "followup": "placeObjOnPlcmt",
+          "slots": {
+            "obj_singCat": "book",
+            "plcmtLoc": "bedroom",
+            "plcmtLoc2": "bookshelf"
+          },
+          "goal": {
+            "type": "delivery",
+            "object": "book",
+            "source": "bedroom",
+            "goal": "bookshelf"
+          },
+          "utterance": "fetch a book from the bedroom and place it on the bookshelf",
+          "rephrasings": [],
+          "spoken": "fetch a book from the bedroom and place it on the bookshelf",
+          "actions": [
+            {
+              "action": "go_to",
+              "location_to_go": "bedroom"
+            },
+            {
+              "action": "pick_object",
+              "object_to_pick": "book"
+            },
+            {
+              "action": "go_to",
+              "location_to_go": "bookshelf"
+            },
+            {
+              "action": "place_object"
+            }
+          ]
+        },
+        {
+          "template": "countObjOnPlcmt",
+          "followup": null,
+          "slots": {
+            "plurCat": "books",
+            "plcmtLoc": "counter"
+          },
+          "goal": {
+            "type": "report",
+            "site": "counter",
+            "target": "books",
+            "answer": "0 books"
+          },
+          "utterance": "tell me how many books there are on the counter",
+          "rephrasings": [],
+          "spoken": "tell me how many books there are on the counter",
+          "actions": [
+            {
+              "action": "go_to",
+              "location_to_go": "counter"
+            },
+            {
+              "action": "count",
+              "target_to_count": "books"
+            },
+            {
+              "action": "go_to",
+              "location_to_go": "start_location"
+            },
+            {
+              "action": "say_with_context",
+              "user_instruction": "books"
+            }
+          ]
+        },
+        {
+          "template": "guideNameFromBeacToBeac",
+          "followup": null,
+          "slots": {
+            "name": "Tom",
+            "loc": "bookshelf",
+            "loc_room": "garage"
+          },
+          "goal": {
+            "type": "escort",
+            "person": "Tom",
+            "source": "bookshelf",
+            "goal": "garage"
+          },
+          "utterance": "take Tom from the bookshelf to the garage",
+          "rephrasings": [],
+          "spoken": "take Tom from the bookshelf to the garage",
+          "actions": [
+            {
+              "action": "go_to",
+              "location_to_go": "bookshelf"
+            },
+            {
+              "action": "find_person_by_name",
+              "name": "Tom"
+            },
+            {
+              "action": "guide_person_to",
+              "destination_room": "garage"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "batch-0003",
+      "records": [
+        {
+          "template": "guideNameFromBeacToBeac",
+          "followup": null,
+          "slots": {
+            "name": "Maria",
+            "loc": "entrance",
+            "loc_room": "garage"
+          },
+          "goal": {
+            "type": "escort",
+            "person": "Maria",
+            "source": "entrance",
+            "goal": "garage"
+          },
+          "utterance": "guide Maria from the entrance to the garage",
+          "rephrasings": [],
+          "spoken": "guide Maria from the entrance to the garage",
+          "actions": [
+            {
+              "action": "go_to",
+              "location_to_go": "entrance"
+            },
+            {
+              "action": "find_person_by_name",
+              "name": "Maria"
+            },
+            {
+              "action": "guide_person_to",
+              "destination_room": "garage"
+            }
+          ]
+        },
+        {
+          "template": "countObjOnPlcmt",
+          "followup": null,
+          "slots": {
+            "plurCat": "books",
+            "plcmtLoc": "dishwasher"
+          },
+          "goal": {
+            "type": "report",
+            "site": "dishwasher",
+            "target": "books",
+            "answer": "0 books"
+          },
+          "utterance": "tell me how many books there are on the dishwasher",
+          "rephrasings": [],
+          "spoken": "tell me how many books there are on the dishwasher",
+          "actions": [
+            {
+              "action": "go_to",
+              "location_to_go": "dishwasher"
+            },
+            {
+              "action": "count",
+              "target_to_count": "books"
+            },
+            {
+              "action": "go_to",
+              "location_to_go": "start_location"
+            },
+            {
+              "action": "say_with_context",
+              "user_instruction": "books"
+            }
+          ]
+        },
+        {
+          "template": "takeObjFromPlcmt",
+          "followup": "deliverObjToNameAtBeac",
+          "slots": {
+            "obj_singCat": "book",
+            "plcmtLoc": "bedroom",
+            "name": "Tom",
+            "room": "bedroom"
+          },
+          "goal": {
+            "type": "handover",
+            "object": "book",
+            "source": "bedroom",
+            "person": "Tom",
+            "goal": "bedroom"
+          },
+          "utterance": "get a book from the bedroom and give it to Tom in the bedroom",
+          "rephrasings": [],
+          "spoken": "get a book from the bedroom and give it to Tom in the bedroom",
+          "actions": [
+            {
+              "action": "go_to",
+              "location_to_go": "bedroom"
+            },
+            {
+              "action": "pick_object",
+              "object_to_pick": "book"
+            },
+            {
+              "action": "go_to",
+              "location_to_go": "bedroom"
+            },
+            {
+              "action": "find_person_by_name",
+              "name": "Tom"
+            },
+            {
+              "action": "give_object"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "batch-0004",
+      "records": [
+        {
+          "template": "countObjOnPlcmt",
+          "followup": null,
+          "slots": {
+            "plurCat": "books",
+            "plcmtLoc": "side_table"
+          },
+          "goal": {
+            "type": "report",
+            "site": "side_table",
+            "target": "books",
+            "answer": "0 books"
+          },
+          "utterance": "tell me how many books there are on the side table",
+          "rephrasings": [],
+          "spoken": "tell me how many books there are on the side table",
+          "actions": [
+            {
+              "action": "go_to",
+              "location_to_go": "side_table"
+            },
+            {
+              "action": "count",
+              "target_to_count": "books"
+            },
+            {
+              "action": "go_to",
+              "location_to_go": "start_location"
+            },
+            {
+              "action": "say_with_context",
+              "user_instruction": "books"
+            }
+          ]
+        },
+        {
+          "template": "takeObjFromPlcmt",
+          "followup": "placeObjOnPlcmt",
+          "slots": {
+            "obj_singCat": "cup",
+            "plcmtLoc": "counter",
+            "plcmtLoc2": "side_table"
+          },
+          "goal": {
+            "type": "delivery",
+            "object": "cup",
+            "source": "counter",
+            "goal": "side_table"
+          },
+          "utterance": "take a cup from the counter and put it on the side table",
+          "rephrasings": [],
+          "spoken": "take a cup from the counter and put it on the side table",
+          "actions": [
+            {
+              "action": "go_to",
+              "location_to_go": "counter"
+            },
+            {
+              "action": "pick_object",
+              "object_to_pick": "cup"
+            },
+            {
+              "action": "go_to",
+              "location_to_go": "side_table"
+            },
+            {
+              "action": "place_object"
+            }
+          ]
+        },
+        {
+          "template": "guideNameFromBeacToBeac",
+          "followup": null,
+          "slots": {
+            "name": "Angel",
+            "loc": "couch",
+            "loc_room": "garage"
+          },
+          "goal": {
+            "type": "escort",
+            "person": "Angel",
+            "source": "couch",
+            "goal": "garage"
+          },
+          "utterance": "guide Angel from the couch to the garage",
+          "rephrasings": [],
+          "spoken": "guide Angel from the couch to the garage",
+          "actions": [
+            {
+              "action": "go_to",
+              "location_to_go": "couch"
+            },
+            {
+              "action": "find_person_by_name",
+              "name": "Angel"
+            },
+            {
+              "action": "guide_person_to",
+              "destination_room": "garage"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "batch-0005",
+      "records": [
+        {
+          "template": "countObjOnPlcmt",
+          "followup": null,
+          "slots": {
+            "plurCat": "apples",
+            "plcmtLoc": "side_table"
+          },
+          "goal": {
+            "type": "report",
+            "site": "side_table",
+            "target": "apples",
+            "answer": "3 apples"
+          },
+          "utterance": "tell me how many apples there are on the side table",
+          "rephrasings": [],
+          "spoken": "tell me how many apples there are on the side table",
+          "actions": [
+            {
+              "action": "go_to",
+              "location_to_go": "side_table"
+            },
+            {
+              "action": "count",
+              "target_to_count": "apples"
+            },
+            {
+              "action": "go_to",
+              "location_to_go": "start_location"
+            },
+            {
+              "action": "say_with_context",
+              "user_instruction": "apples"
+            }
+          ]
+        },
+        {
+          "template": "guideNameFromBeacToBeac",
+          "followup": null,
+          "slots": {
+            "name": "Angel",
+            "loc": "couch",
+            "loc_room": "office"
+          },
+          "goal": {
+            "type": "escort",
+            "person": "Angel",
+            "source": "couch",
+            "goal": "office"
+          },
+          "utterance": "guide Angel from the couch to the office",
+          "rephrasings": [],
+          "spoken": "guide Angel from the couch to the office",
+          "actions": [
+            {
+              "action": "go_to",
+              "location_to_go": "couch"
+            },
+            {
+              "action": "find_person_by_name",
+              "name": "Angel"
+            },
+            {
+              "action": "guide_person_to",
+              "destination_room": "office"
+            }
+          ]
+        },
+        {
+          "template": "takeObjFromPlcmt",
+          "followup": "deliverObjToNameAtBeac",
+          "slots": {
+            "obj_singCat": "plate",
+            "plcmtLoc": "counter",
+            "name": "Tom",
+            "room": "bedroom"
+          },
+          "goal": {
+            "type": "handover",
+            "object": "plate_1",
+            "source": "counter",
+            "person": "Tom",
+            "goal": "bedroom"
+          },
+          "utterance": "fetch a plate from the counter and deliver it to Tom in the bedroom",
+          "rephrasings": [],
+          "spoken": "fetch a plate from the counter and deliver it to Tom in the bedroom",
+          "actions": [
+            {
+              "action": "go_to",
+              "location_to_go": "counter"
+            },
+            {
+              "action": "pick_object",
+              "object_to_pick": "plate"
+            },
+            {
+              "action": "go_to",
+              "location_to_go": "bedroom"
+            },
+            {
+              "action": "find_person_by_name",
+              "name": "Tom"
+            },
+            {
+              "action": "give_object"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "batch-0006",
+      "records": [
+        {
+          "template": "guideNameFromBeacToBeac",
+          "followup": null,
+          "slots": {
+            "name": "Maria",
+            "loc": "entrance",
+            "loc_room": "bedroom"
+          },
+          "goal": {
+            "type": "escort",
+            "person": "Maria",
+            "source": "entrance",
+            "goal": "bedroom"
+          },
+          "utterance": "lead Maria from the entrance to the bedroom",
+          "rephrasings": [],
+          "spoken": "lead Maria from the entrance to the bedroom",
+          "actions": [
+            {
+              "action": "go_to",
+              "location_to_go": "entrance"
+            },
+            {
+              "action": "find_person_by_name",
+              "name": "Maria"
+            },
+            {
+              "action": "guide_person_to",
+              "destination_room": "bedroom"
+            }
+          ]
+        },
+        {
+          "template": "countObjOnPlcmt",
+          "followup": null,
+          "slots": {
+            "plurCat": "books",
+            "plcmtLoc": "side_table"
+          },
+          "goal": {
+            "type": "report",
+            "site": "side_table",
+            "target": "books",
+            "answer": "0 books"
+          },
+          "utterance": "tell me how many books there are on the side table",
+          "rephrasings": [],
+          "spoken": "tell me how many books there are on the side table",
+          "actions": [
+            {
+              "action": "go_to",
+              "location_to_go": "side_table"
+            },
+            {
+              "action": "count",
+              "target_to_count": "books"
+            },
+            {
+              "action": "go_to",
+              "location_to_go": "start_location"
+            },
+            {
+              "action": "say_with_context",
+              "user_instruction": "books"
+            }
+          ]
+        },
+        {
+          "template": "takeObjFromPlcmt",
+          "followup": "placeObjOnPlcmt",
+          "slots": {
+            "obj_singCat": "cup",
+            "plcmtLoc": "counter",
+            "plcmtLoc2": "bookshelf"
+          },
+          "goal": {
+            "type": "delivery",
+            "object": "cup",
+            "source": "counter",
+            "goal": "bookshelf"
+          },
+          "utterance": "get a cup from the counter and place it on the bookshelf",
+          "rephrasings": [],
+          "spoken": "get a cup from the counter and place it on the bookshelf",
+          "actions": [
+            {
+              "action": "go_to",
+              "location_to_go": "counter"
+            },
+            {
+              "action": "pick_object",
+              "object_to_pick": "cup"
+            },
+            {
+              "action": "go_to",
+              "location_to_go": "bookshelf"
+            },
+            {
+              "action": "place_object"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "batch-0007",
+      "records": [
+        {
+          "template": "guideNameFromBeacToBeac",
+          "followup": null,
+          "slots": {
+            "name": "Angel",
+            "loc": "couch",
+            "loc_room": "garage"
+          },
+          "goal": {
+            "type": "escort",
+            "person": "Angel",
+            "source": "couch",
+            "goal": "garage"
+          },
+          "utterance": "escort Angel from the couch to the garage",
+          "rephrasings": [],
+          "spoken": "escort Angel from the couch to the garage",
+          "actions": [
+            {
+              "action": "go_to",
+              "location_to_go": "couch"
+            },
+            {
+              "action": "find_person_by_name",
+              "name": "Angel"
+            },
+            {
+              "action": "guide_person_to",
+              "destination_room": "garage"
+            }
+          ]
+        },
+        {
+          "template": "takeObjFromPlcmt",
+          "followup": "deliverObjToNameAtBeac",
+          "slots": {
+            "obj_singCat": "plate",
+            "plcmtLoc": "counter",
+            "name": "Tom",
+            "room": "bedroom"
+          },
+          "goal": {
+            "type": "handover",
+            "object": "plate_1",
+            "source": "counter",
+            "person": "Tom",
+            "goal": "bedroom"
+          },
+          "utterance": "fetch a plate from the counter and give it to Tom in the bedroom",
+          "rephrasings": [],
+          "spoken": "fetch a plate from the counter and give it to Tom in the bedroom",
+          "actions": [
+            {
+              "action": "go_to",
+              "location_to_go": "counter"
+            },
+            {
+              "action": "pick_object",
+              "object_to_pick": "plate"
+            },
+            {
+              "action": "go_to",
+              "location_to_go": "bedroom"
+            },
+            {
+              "action": "find_person_by_name",
+              "name": "Tom"
+            },
+            {
+              "action": "give_object"
+            }
+          ]
+        },
+        {
+          "template": "countObjOnPlcmt",
+          "followup": null,
+          "slots": {
+            "plurCat": "apples",
+            "plcmtLoc": "bookshelf"
+          },
+          "goal": {
+            "type": "report",
+            "site": "bookshelf",
+            "target": "apples",
+            "answer": "0 apples"
+          },
+          "utterance": "tell me how many apples there are on the bookshelf",
+          "rephrasings": [],
+          "spoken": "tell me how many apples there are on the bookshelf",
+          "actions": [
+            {
+              "action": "go_to",
+              "location_to_go": "bookshelf"
+            },
+            {
+              "action": "count",
+              "target_to_count": "apples"
+            },
+            {
+              "action": "go_to",
+              "location_to_go": "start_location"
+            },
+            {
+              "action": "say_with_context",
+              "user_instruction": "apples"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

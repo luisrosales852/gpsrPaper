@@ -37,7 +37,7 @@ The merger is intentionally framework-free: it talks to BAML objects via
 from dataclasses import dataclass, field, replace
 from math import isfinite
 from types import SimpleNamespace
-from typing import Any, Callable, Dict, FrozenSet, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, FrozenSet, Mapping, List, Optional, Sequence, Tuple
 
 # Action-kind classifications.
 _GRIPPER_ACQUIRES = frozenset({"pick_object"})
@@ -57,10 +57,8 @@ LARGE_M = 1000.0
 # Max DP states (n * prod(L_c + 1)) before falling back to sequential.
 _STATE_CAP = 200_000
 
-# Tiebreaker weight: tiny per-cross-command-switch penalty so equal-cost
-# schedules prefer per-command sequential order. Must stay well below any
-# real distance difference.
-_TIEBREAK_EPSILON = 1e-6
+class InfeasibleResidual(ValueError):
+    """A legal residual schedule could not be produced within the planning bound."""
 
 
 @dataclass
@@ -109,6 +107,7 @@ class _Segment:
     # Escorts with a destination, in order: (gripper state set earlier in the
     # segment, None if the segment's start state still holds; destination).
     escorts: List[Tuple[Optional[bool], str]] = field(default_factory=list)
+    held_dwell_m: Tuple[float, float] = (0.0, 0.0)
     reads: FrozenSet[_Var] = frozenset()
     writes: FrozenSet[_Var] = frozenset()
 
@@ -117,7 +116,7 @@ def _kind(action: Any) -> str:
     return getattr(action, "action", "") or ""
 
 
-def _decompose(cmd_idx: int, command: Any) -> List[_Segment]:
+def _decompose(cmd_idx: int, command: Any, dwell_m: Optional[Mapping[str, float]] = None) -> List[_Segment]:
     """Split a command's action list into go_to-led segments."""
     actions = list(getattr(command, "commands", []))
     segments: List[_Segment] = []
@@ -131,6 +130,18 @@ def _decompose(cmd_idx: int, command: Any) -> List[_Segment]:
     def flush() -> None:
         nonlocal cur_indices, cur_end, cur_exit, cur_escorts
         if cur_indices:
+            held_dwell = [0.0, 0.0]
+            if dwell_m:
+                for initial in (0, 1):
+                    held = bool(initial)
+                    for idx in cur_indices:
+                        kind = _kind(actions[idx])
+                        if held and kind != "go_to":
+                            held_dwell[initial] += dwell_m.get(kind, 0.0)
+                        if kind in _GRIPPER_ACQUIRES:
+                            held = True
+                        elif kind in _GRIPPER_RELEASES:
+                            held = False
             segments.append(
                 _Segment(
                     cmd=cmd_idx,
@@ -140,6 +151,7 @@ def _decompose(cmd_idx: int, command: Any) -> List[_Segment]:
                     exit=cur_exit,
                     at_origin=not seen_go_to,
                     escorts=cur_escorts,
+                    held_dwell_m=tuple(held_dwell),
                 )
             )
         cur_indices = []
@@ -349,7 +361,7 @@ def _carried_inside(segments: Sequence[_Segment], cost: Callable[[Any, Any], flo
 
 
 def _build_holding_after(
-    segments_per_cmd: Sequence[Sequence[_Segment]],
+    segments_per_cmd: Sequence[Sequence[_Segment]], initial_holder: Optional[int] = None,
 ) -> List[List[bool]]:
     """For each command c, ``holding_after[c][p]`` is True iff scheduling
     ``p`` segments of cmd c (in source order) leaves the gripper held.
@@ -357,9 +369,9 @@ def _build_holding_after(
     p ranges 0..len(segments_per_cmd[c]).
     """
     result: List[List[bool]] = []
-    for segs in segments_per_cmd:
-        held = False
-        ha = [False]
+    for cmd, segs in enumerate(segments_per_cmd):
+        held = cmd == initial_holder
+        ha = [held]
         for seg in segs:
             # Order within the segment matters: "place, pick" ends held.
             if seg.ends_holding is not None:
@@ -399,6 +411,7 @@ def _optimal_schedule(
     holding_penalty: float = 0.0,
     *,
     navigation_overhead: float = 0.0,
+    greedy: bool = False,
 ) -> List[int]:
     """DP over per-command progress vectors.
 
@@ -423,9 +436,9 @@ def _optimal_schedule(
     seg_lens = [len(ids) for ids in seg_ids]
     n = len(seg_lens)
 
-    INF = float("inf")
+    INF = (float("inf"), 0, 0)
     start: Tuple[Tuple[int, ...], int] = (tuple([0] * n), -1)
-    f = {start: 0.0}
+    f = {start: (0.0, 0, 0)}
     parent: dict = {start: None}
 
     layer = [start]
@@ -433,7 +446,7 @@ def _optimal_schedule(
         next_layer: dict = {}  # insertion-ordered set of states in layer + 1
         for state in layer:
             k, last = state
-            cur_cost = f[state]
+            cur_cost, preference, switches = f[state]
             holder = _gripper_holder(k, holding_after)
             here = seg_ids[last][k[last] - 1] if last >= 0 else -1
             unmoved = here < 0 or (here in still and all(
@@ -448,28 +461,33 @@ def _optimal_schedule(
                     continue
                 if needs is not None and any(k[d] < m for d, m in needs[c][k[c]]):
                     continue
-                if here < 0:
-                    step = seed[u] + _TIEBREAK_EPSILON * c
-                else:
-                    step = row[u] + (_TIEBREAK_EPSILON if c != last else 0.0)
+                step = row[u]
                 if navigation_overhead and 0 < row[u] < LARGE_M:
                     step += navigation_overhead
                 if holder is not None:
                     step += holding_penalty * row[u]
-                step += holding_penalty * carried[u][holder is not None]
+                step += holding_penalty * (carried[u][holder is not None]
+                                           + segments[u].held_dwell_m[holder is not None])
                 nxt = (k[:c] + (k[c] + 1,) + k[c + 1:], c)
-                cand = cur_cost + step
+                switched = int(last >= 0 and c != last)
+                # Preserve the historical issue-order/switch preference only on a cost tie.
+                cand = (cur_cost + step, preference + (c if last < 0 else switched),
+                        switches + switched)
                 if cand < f.get(nxt, INF):
                     f[nxt] = cand
                     parent[nxt] = state
                     next_layer[nxt] = None
         layer = list(next_layer)
+        if greedy and layer:
+            layer = [min(layer, key=f.__getitem__)]
 
     full = tuple(seg_lens)
     best: Optional[Tuple[Tuple[int, ...], int]] = None
     best_cost = INF
     for c in range(n):
         total = f.get((full, c), INF)
+        if greedy and (full, c) not in layer:
+            continue
         if total < best_cost:
             best_cost = total
             best = (full, c)
@@ -506,6 +524,10 @@ def merge(
     holding_penalty: float = 0.0,
     *,
     navigation_overhead: float = 0.0,
+    skill_durations_s: Optional[Mapping[str, float]] = None,
+    speed_m_s: float = 1.0,
+    initial_holder: Optional[int] = None,
+    greedy: bool = False,
 ) -> InterleavedPlan:
     """Merge N parsed commands into one interleaved plan.
 
@@ -529,7 +551,20 @@ def merge(
     holding an object cost ``1 + holding_penalty``; 0 minimises plain travel.
     ``navigation_overhead`` adds a nonnegative distance-equivalent cost to
     each reachable, positive-distance go_to hop in the command plan.
+    skill_durations_s models stationary skill time. An action changes possession
+    at completion. Multiply occupied seconds by speed_m_s to price them in metres.
+    initial_holder identifies a verified carry at the start of a residual plan.
+    greedy selects the cheapest eligible next step for the benchmark baseline.
     """
+    if not isfinite(speed_m_s) or speed_m_s <= 0:
+        raise ValueError("speed_m_s must be finite and positive")
+    dwell_m = {}
+    for kind, duration in (skill_durations_s or {}).items():
+        if not isfinite(duration) or duration < 0:
+            raise ValueError(f"invalid skill duration for {kind}")
+        dwell_m[kind] = duration * speed_m_s
+    if initial_holder is not None and not 0 <= initial_holder < len(commands):
+        raise ValueError("initial_holder must identify a command")
     if not isfinite(navigation_overhead) or navigation_overhead < 0:
         raise ValueError("navigation_overhead must be finite and nonnegative")
     if distance is None:
@@ -550,7 +585,7 @@ def merge(
     flat_segments: List[_Segment] = []
     segments_per_cmd: List[List[_Segment]] = []
     for cmd_idx, command in enumerate(commands):
-        per_cmd = _decompose(cmd_idx, command)
+        per_cmd = _decompose(cmd_idx, command, dwell_m)
         _annotate_effects(per_cmd, command, start=origin_name)
         segments_per_cmd.append(per_cmd)
         flat_segments.extend(per_cmd)
@@ -565,14 +600,17 @@ def merge(
         seg_ids.append(list(range(gi, gi + len(per_cmd))))
         gi += len(per_cmd)
 
-    holding_after = _build_holding_after(segments_per_cmd)
+    holding_after = _build_holding_after(segments_per_cmd, initial_holder)
     needs = (
         _build_needs(segments_per_cmd, _room_table(flat_segments, room_of))
         if dependencies
         else None
     )
 
-    if _state_count([len(ids) for ids in seg_ids]) > _STATE_CAP:
+    above_cap = _state_count([len(ids) for ids in seg_ids]) > _STATE_CAP
+    if above_cap:
+        if initial_holder is not None:
+            raise InfeasibleResidual("residual DP exceeds the state bound")
         schedule = _sequential_schedule(flat_segments)
     else:
         schedule = _optimal_schedule(
@@ -584,13 +622,40 @@ def merge(
             needs,
             origin_name,
             holding_penalty,
-            navigation_overhead=navigation_overhead,
+            navigation_overhead=navigation_overhead, greedy=greedy,
         )
 
     actions = _flatten(schedule, flat_segments, commands, origin_name)
+    if initial_holder is not None:
+        owner = initial_holder
+        for step in actions:
+            if step.requires_gripper:
+                if owner is not None:
+                    raise InfeasibleResidual("remaining pick requires an empty gripper")
+                owner = step.source_cmd
+            elif step.releases_gripper:
+                if owner != step.source_cmd:
+                    raise InfeasibleResidual("remaining release requires its original holder")
+                owner = None
     fallback = [_collapse_redundant_go_tos(per) for per in _build_fallback(commands, origin_name)]
 
     return InterleavedPlan(actions=actions, fallback=fallback, origin_name=origin_name)
+
+
+def replan_remaining(commands: Sequence[Sequence[PlanAction]], **options) -> List[PlanAction]:
+    """Solve residual commands with explicit entry drives, retaining source identities."""
+    raw = [SimpleNamespace(commands=[step.action for step in command]) for command in commands]
+    plan = merge(raw, **options)
+    result = []
+    for step in plan.actions:
+        if step.source_idx < 0:
+            result.append(step)
+            continue
+        original = commands[step.source_cmd][step.source_idx]
+        goals = tuple(goal for cmd, idx in step.navigation_goals
+                      for goal in commands[cmd][idx].navigation_goals)
+        result.append(replace(original, navigation_goals=goals))
+    return result
 
 
 def _reachable(origin_name: str, commands: Sequence[Any], distance: DistanceFn, has_pose: bool) -> bool:
