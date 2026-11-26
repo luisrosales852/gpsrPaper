@@ -61,6 +61,10 @@ class InfeasibleResidual(ValueError):
     """A legal residual schedule could not be produced within the planning bound."""
 
 
+class NoInterleavingSchedule(ValueError):
+    """No feasible complete schedule has the requested terminal bonus bit."""
+
+
 @dataclass
 class PlanAction:
     """An action with its provenance + gripper effect."""
@@ -181,11 +185,11 @@ def _decompose(cmd_idx: int, command: Any, dwell_m: Optional[Mapping[str, float]
     return segments
 
 
-# State is keyed by place, not by name: the parser names objects and people
-# inconsistently across commands, but every action has a place. A place None
-# (unknown) overlaps every place.
+# Object and person poses are keyed by place. Attention is a single shared
+# variable: finding someone at any place changes whom the robot attends to.
 _OBJECTS = "objects"
 _PEOPLE = "people"
+_ATTENTION = "attention"
 
 # kind -> (domains read, domains written) at the current place.
 # Unlisted kinds touch no shared state.
@@ -195,12 +199,12 @@ _EFFECTS = {
     "give_object": ({_PEOPLE}, {_OBJECTS}),
     "count": ({_OBJECTS, _PEOPLE}, set()),
     "get_visual_info": ({_OBJECTS}, set()),
-    "find_person": ({_PEOPLE}, set()),
-    "find_person_by_name": ({_PEOPLE}, set()),
-    "get_person_info": ({_PEOPLE}, set()),
+    "find_person": ({_PEOPLE}, {_ATTENTION}),
+    "find_person_by_name": ({_PEOPLE}, {_ATTENTION}),
+    "get_person_info": ({_PEOPLE, _ATTENTION}, set()),
     # Escorts also write the destination; see _action_effects.
-    "follow_person_until": ({_PEOPLE}, {_PEOPLE}),
-    "guide_person_to": ({_PEOPLE}, {_PEOPLE}),
+    "follow_person_until": ({_PEOPLE, _ATTENTION}, {_PEOPLE}),
+    "guide_person_to": ({_PEOPLE, _ATTENTION}, {_PEOPLE}),
 }
 
 
@@ -217,8 +221,8 @@ def _action_effects(action: Any, here: Optional[str]) -> Tuple[set, set, Optiona
     if kind == "go_to":
         return set(), set(), _norm_location(getattr(action, "location_to_go", None))
     read_domains, write_domains = _EFFECTS.get(kind, (set(), set()))
-    reads = {(d, here) for d in read_domains}
-    writes = {(d, here) for d in write_domains}
+    reads = {(d, None if d == _ATTENTION else here) for d in read_domains}
+    writes = {(d, None if d == _ATTENTION else here) for d in write_domains}
     here_after = here
     if kind in _ESCORT_DESTINATION:
         here_after = _norm_location(getattr(action, _ESCORT_DESTINATION[kind], None))
@@ -412,6 +416,7 @@ def _optimal_schedule(
     *,
     navigation_overhead: float = 0.0,
     greedy: bool = False,
+    interleaved: Optional[bool] = None,
 ) -> List[int]:
     """DP over per-command progress vectors.
 
@@ -437,7 +442,7 @@ def _optimal_schedule(
     n = len(seg_lens)
 
     INF = (float("inf"), 0, 0)
-    start: Tuple[Tuple[int, ...], int] = (tuple([0] * n), -1)
+    start = (tuple([0] * n), -1, False)
     f = {start: (0.0, 0, 0)}
     parent: dict = {start: None}
 
@@ -445,7 +450,7 @@ def _optimal_schedule(
     for _ in range(M):
         next_layer: dict = {}  # insertion-ordered set of states in layer + 1
         for state in layer:
-            k, last = state
+            k, last, bit = state
             cur_cost, preference, switches = f[state]
             holder = _gripper_holder(k, holding_after)
             here = seg_ids[last][k[last] - 1] if last >= 0 else -1
@@ -468,7 +473,12 @@ def _optimal_schedule(
                     step += holding_penalty * row[u]
                 step += holding_penalty * (carried[u][holder is not None]
                                            + segments[u].held_dwell_m[holder is not None])
-                nxt = (k[:c] + (k[c] + 1,) + k[c + 1:], c)
+                next_bit = bit
+                if interleaved is not None and not bit:
+                    next_bit = any(0 < k[d] < seg_lens[d] for d in range(n) if d != c)
+                    if next_bit and not interleaved:
+                        continue
+                nxt = (k[:c] + (k[c] + 1,) + k[c + 1:], c, next_bit)
                 switched = int(last >= 0 and c != last)
                 # Preserve the historical issue-order/switch preference only on a cost tie.
                 cand = (cur_cost + step, preference + (c if last < 0 else switched),
@@ -482,24 +492,27 @@ def _optimal_schedule(
             layer = [min(layer, key=f.__getitem__)]
 
     full = tuple(seg_lens)
-    best: Optional[Tuple[Tuple[int, ...], int]] = None
+    best = None
     best_cost = INF
     for c in range(n):
-        total = f.get((full, c), INF)
-        if greedy and (full, c) not in layer:
+        terminal = (full, c, bool(interleaved))
+        total = f.get(terminal, INF)
+        if greedy and terminal not in layer:
             continue
         if total < best_cost:
             best_cost = total
-            best = (full, c)
+            best = terminal
 
     if best is None:
+        if interleaved is not None:
+            raise NoInterleavingSchedule(f"no feasible schedule with interleaved={interleaved}")
         # Only when 2+ commands pick without ever releasing (a parse error).
         return _sequential_schedule(segments)
 
     schedule: List[int] = []
     state = best
     while state is not None and state[1] >= 0:
-        k, last = state
+        k, last, _ = state
         schedule.append(seg_ids[last][k[last] - 1])
         state = parent[state]
     schedule.reverse()
@@ -528,6 +541,7 @@ def merge(
     speed_m_s: float = 1.0,
     initial_holder: Optional[int] = None,
     greedy: bool = False,
+    interleaved: Optional[bool] = None,
 ) -> InterleavedPlan:
     """Merge N parsed commands into one interleaved plan.
 
@@ -555,6 +569,8 @@ def merge(
     at completion. Multiply occupied seconds by speed_m_s to price them in metres.
     initial_holder identifies a verified carry at the start of a residual plan.
     greedy selects the cheapest eligible next step for the benchmark baseline.
+    interleaved requests the exact minimum with the paper's terminal bit fixed
+    to True or False. None uses the ordinary unrestricted objective.
     """
     if not isfinite(speed_m_s) or speed_m_s <= 0:
         raise ValueError("speed_m_s must be finite and positive")
@@ -579,8 +595,8 @@ def merge(
             return base(origin_name if a is None else a, b)
     has_origin = origin is not None or origin_name is not None
 
-    if not commands:
-        return InterleavedPlan(actions=[], fallback=[])
+    if interleaved is not None and greedy:
+        raise ValueError("a fixed interleaving bit requires exact scheduling")
 
     flat_segments: List[_Segment] = []
     segments_per_cmd: List[List[_Segment]] = []
@@ -591,6 +607,8 @@ def merge(
         flat_segments.extend(per_cmd)
 
     if not flat_segments:
+        if interleaved:
+            raise NoInterleavingSchedule("an empty batch cannot interleave")
         return InterleavedPlan(actions=[], fallback=_build_fallback(commands, origin_name))
 
     # seg_ids[c][j] = flat index of command c's j-th segment.
@@ -607,8 +625,11 @@ def merge(
         else None
     )
 
-    above_cap = _state_count([len(ids) for ids in seg_ids]) > _STATE_CAP
+    bit_states = 2 if interleaved else 1
+    above_cap = bit_states * _state_count([len(ids) for ids in seg_ids]) > _STATE_CAP
     if above_cap:
+        if interleaved is not None:
+            raise ValueError("exact interleaving search exceeds the state bound")
         if initial_holder is not None:
             raise InfeasibleResidual("residual DP exceeds the state bound")
         schedule = _sequential_schedule(flat_segments)
@@ -622,7 +643,7 @@ def merge(
             needs,
             origin_name,
             holding_penalty,
-            navigation_overhead=navigation_overhead, greedy=greedy,
+            navigation_overhead=navigation_overhead, greedy=greedy, interleaved=interleaved,
         )
 
     actions = _flatten(schedule, flat_segments, commands, origin_name)

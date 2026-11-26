@@ -13,8 +13,10 @@ from statistics import mean, stdev
 from types import SimpleNamespace
 
 from gpsr_merger.recovery import RecoveryPolicy
+from gpsr_merger.merger import NoInterleavingSchedule
 from sim.recovery_trials import go, say, _interleaved
 from sim.run_sim import HERE, run_once
+from sim.robot import LIN_SPEED
 from sim.skill_model import SkillModel, fit_skill_model
 from sim.world import World
 
@@ -237,12 +239,17 @@ def score(records, log, world):
 
 
 def evaluate(manifest, apartments, out, repeats, rates, skills=None, holding_penalty=0.0,
-             travel_exposure_only=False):
+             travel_exposure_only=False, bonus_comparison=False):
     if repeats < 1 or not manifest["batches"] or not rates:
         raise ValueError("provide at least one batch, rate and replicate")
     if skills and len(rates) > 1:
         raise ValueError("use one fallback rate with a fitted per-skill model")
-    rows = []
+    methods = METHODS
+    if bonus_comparison:
+        methods = {name: (mode, RecoveryPolicy.SKIP_ONLY) for name, mode in
+                   [("merger", "merged"), ("back-to-back", "sequential"),
+                    ("bit-0", "merged"), ("bit-1", "merged")]}
+    rows, comparisons, unavailable = [], [], []
     for layout, apartment in enumerate(apartments):
         world = World(apartment)
         for i, batch in enumerate(manifest["batches"]):
@@ -253,28 +260,44 @@ def evaluate(manifest, apartments, out, repeats, rates, skills=None, holding_pen
                 for trial in range(repeats):
                     seed = f"{manifest['seed']}/{layout}/{i}/{trial}"
                     paired = []
-                    for method, (mode, policy) in METHODS.items():
+                    for method, (mode, policy) in methods.items():
                         args = SimpleNamespace(apartment=apartment, width=832, height=720, fps=30,
                             speed=3, camera="topdown", retries=2, budget=420, fail=[], no_video=True,
                             print_tree=False, ordering_baseline=True, recovery_policy=policy, replan=method.endswith("+replan"),
                             greedy=method == "greedy", skill_model=SkillModel(seed, rate, skills),
+                            interleaved={"bit-0": False, "bit-1": True}.get(method),
                             travel_exposure_only=travel_exposure_only,
                             holding_penalty=holding_penalty if mode == "merged" and method != "greedy" else 0.0)
                         directory = out / f"layout-{layout}" / batch["name"] / f"{rate}-{trial}" / method
-                        run_once(scenario, mode, str(directory), args)
+                        try:
+                            run_once(scenario, mode, str(directory), args)
+                        except NoInterleavingSchedule:
+                            unavailable.append(dict(batch=i, layout=layout, seed=seed, rate=rate, method=method))
+                            continue
                         log = json.loads((directory / "run.json").read_text())
                         paired.append(dict(batch=i, layout=layout, seed=seed, rate=rate, method=method,
+                                           planned_hops_m=log["summary"]["planned_cost_m"],
                                            **score(records, log, world)))
                     baseline = next(r for r in paired if r["method"] == "back-to-back")
                     for r in paired:
-                        r["bonus_evidence"] = (r["interleaved"] and len(r["completed"]) == 3 and r["returned"]
+                        r["bonus_evidence"] = (r["interleaved"] and len(records) == 3
+                            and len(r["completed"]) == 3 and r["returned"]
                             and len(baseline["completed"]) == 3 and baseline["returned"]
                             and (r["elapsed_s"] < baseline["elapsed_s"] or r["distance_m"] < baseline["distance_m"]))
                     rows.extend(paired)
+                    if bonus_comparison and rate == rates[0] and trial == 0:
+                        plans = {r["method"]: r["planned_hops_m"] for r in paired}
+                        delta = (plans["bit-1"] - plans["bit-0"]
+                                 if "bit-1" in plans and "bit-0" in plans else None)
+                        comparisons.append(dict(batch=batch["name"], layout=layout, planned_hops_m=plans,
+                                                extra_hops_m=delta,
+                                                extra_nominal_travel_s=None if delta is None else delta / LIN_SPEED))
     summary = []
     for rate in rates:
-        for method in METHODS:
+        for method in methods:
             group = [r for r in rows if r["rate"] == rate and r["method"] == method]
+            if not group:
+                continue
             metrics = {"pilot_units": [r["units"] for r in group],
                        "violations": [sum(r["violations"].values()) for r in group],
                        "solved_fraction": [len(r["completed"]) / 3 for r in group],
@@ -287,7 +310,8 @@ def evaluate(manifest, apartments, out, repeats, rates, skills=None, holding_pen
     save(out / "results.json", {"layouts": [hashlib.sha256(p.read_bytes()).hexdigest() for p in apartments],
                                 "manifest_sha256": hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest(),
                                 "holding_penalty": holding_penalty, "travel_exposure_only": travel_exposure_only,
-                                "skills": skills, "summary": summary, "rows": rows})
+                                "skills": skills, "summary": summary, "rows": rows,
+                                "bonus_comparisons": comparisons, "unavailable": unavailable})
     return rows
 
 
@@ -309,6 +333,8 @@ def main():
     run.add_argument("--repeats", type=int, default=1)
     run.add_argument("--skills", type=Path)
     run.add_argument("--travel-exposure-only", action="store_true")
+    run.add_argument("--bonus-comparison", action="store_true",
+                     help="pair the optimal b=0 and b=1 schedules with the issued-order baseline")
     run.add_argument("--holding-penalty", type=float, default=0.0)
     fit = sub.add_parser("fit")
     fit.add_argument("observations", type=Path)
@@ -322,7 +348,7 @@ def main():
         rows = evaluate(json.loads(args.manifest.read_text()), args.apartment or [Path(HERE)/"apartment.json", Path(HERE)/"apartment_partitioned.json"],
                         args.out, args.repeats, args.rates,
                         json.loads(args.skills.read_text()) if args.skills else None, args.holding_penalty,
-                        args.travel_exposure_only)
+                        args.travel_exposure_only, args.bonus_comparison)
         print(f"{len(rows)} paired method runs written to {args.out}")
 
 

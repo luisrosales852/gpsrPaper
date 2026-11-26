@@ -23,11 +23,12 @@ Size: S = a day or less · M = a few days · L = a project of its own.
 
 ## §III-B Objectives that are not additive
 
-- **Interleaving-bonus bit** b in the state (×2 states). Needs the technical
-  committee's definition of "meaningful" interleaving. M
-- **Time limit**: elapsed time t in the state, Δ = 1 s, T_max = 420 s
-  (315,000 states with the bonus bit). Needs τ and κ in seconds. Note
-  `_STATE_CAP` is 2×10⁵, below that count. M
+- **Interleaving bonus.** The paired benchmark now measures both values of the
+  terminal bit. Calibrate a reward and compare its predictions with referee
+  decisions about meaningful savings.
+- **Time limit.** The deterministic endgame experiment includes return time
+  and tests one- and five-second bins. Validate travel and skill times on the
+  robot, then evaluate partial credit and uncertain durations on held-out batches.
 
 ## Replanning and stochastic recovery
 
@@ -38,9 +39,9 @@ Size: S = a day or less · M = a few days · L = a project of its own.
 
 ## §II-A / Table II — modelling differences
 
-- **"Attention"** (the person attended to) is a state variable in the paper;
-  the code keys people by place instead. Equivalent while find/use stay in one
-  segment, which is how the parser emits them.
+- **Person attention on the robot.** The local merger orders shared attention
+  reads and writes across places. Port the rule to `home2` and repeat the
+  two-person pose test with the robot camera.
 - Table II verify-todo: `give_object` fixed 2026-11-21 (writes objects).
   The rest matches `_EFFECTS`; reads are a superset (conservative).
 

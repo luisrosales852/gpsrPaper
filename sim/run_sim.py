@@ -109,6 +109,7 @@ def _plan(world, commands, origin, args):
         navigation_overhead=getattr(args, "navigation_overhead", 0.0),
         skill_durations_s=None if getattr(args, "travel_exposure_only", False) else DURATION,
         speed_m_s=LIN_SPEED, greedy=getattr(args, "greedy", False),
+        interleaved=getattr(args, "interleaved", None),
     )
     return plan, distance, origin_name
 

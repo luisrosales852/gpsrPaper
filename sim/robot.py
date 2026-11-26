@@ -15,7 +15,6 @@ import math
 from typing import Callable, List, Optional, Sequence, Tuple
 
 import mujoco
-import numpy as np
 
 from sim.world import SimObject, SimPerson, World
 

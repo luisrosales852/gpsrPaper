@@ -173,10 +173,21 @@ def planned_travel(plan_actions: Sequence[PlanAction], commands: Sequence[Any], 
                 total += navigation(pos, tgt, weight)
                 pos = tgt
             continue
-        before = list(getattr(commands[pa.source_cmd], "commands", []))[: pa.source_idx]
-        if origin_name is None and all(getattr(x, "action", "") != "go_to" for x in before):
-            total += navigation(pos, origin, weight)
-            pos = origin
+        if origin_name is None:
+            # The planner prices a headless segment at the start even without
+            # an executable return drive. The next segment's go_to may also
+            # have collapsed against the last explicit visit. Recover both
+            # modeled entries from the first skill of each source segment.
+            if pa.source_idx == 0:
+                total += navigation(pos, origin, weight)
+                pos = origin
+            elif pa.source_idx > 0:
+                prev = commands[pa.source_cmd].commands[pa.source_idx - 1]
+                if getattr(prev, "action", "") == "go_to":
+                    entry = getattr(prev, "location_to_go", None)
+                    if entry is not None:
+                        total += navigation(pos, entry, weight)
+                        pos = entry
         held = (held or pa.requires_gripper) and not pa.releases_gripper
         dest = getattr(pa.action, _ESCORT_DEST.get(kind, ""), None) if kind in _ESCORT_DEST else None
         if isinstance(dest, str) and dest.strip():

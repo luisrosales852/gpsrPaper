@@ -17,7 +17,7 @@ from gpsr_merger.status import Status
 from gpsr_merger.timeouts import timeout_for
 from sim.robot import ANG_SPEED, DT, EPS_M, LIN_SPEED, SimRobot, SimTimeout, wrap
 from sim.routing import Router, VisGraphRouter, path_length
-from sim.world import SimObject, SimPerson, World
+from sim.world import SimPerson, World
 
 SENSE_RADIUS = 3.2      # m — perception range for find/count/visual-info
 REACH_RADIUS = 2.4      # m — the robot must be at the object's location to pick
@@ -59,7 +59,8 @@ class SimSubtaskHandler:
         self.failures = dict(failures or {})
         self.site = world.nearest_site(robot.xy)
         self.current = None              # PlanAction, set by on_action_start
-        self.locked: Dict[int, SimPerson] = {}   # per source command
+        self.attended_person: Optional[SimPerson] = None
+        self.locked: Dict[int, SimPerson] = {}   # command-local handover / answer targets
         self.results: Dict[int, Dict[int, str]] = {}
 
     # ---- wiring from bt_builder hooks ------------------------------------
@@ -206,17 +207,15 @@ class SimSubtaskHandler:
         ps = [p for p in self.world.people if self._near(self.robot.person_xy(p), radius)]
         return sorted(ps, key=lambda p: World.distance(self.robot.xy, self.robot.person_xy(p)))
 
-    def _target_person(self) -> Optional[SimPerson]:
-        """The person this command is working with.
+    def _finish_find(self, person: SimPerson) -> Tuple[Status, Any]:
+        result = self._end(Status.EXECUTION_SUCCESS, person.name)
+        self.attended_person = person
+        self.locked[self.cmd_idx] = person
+        return result
 
-        Prefers the one locked by an earlier ``find_person*`` *in the same source
-        command* — which is what makes the per-command ordering invariant
-        observable: if the merger ever emitted a follow before its find, this
-        would fall back and the event log would show it.
-        """
-        p = self.locked.get(self.cmd_idx)
-        if p is not None:
-            return p
+    def _target_person(self, preferred: Optional[SimPerson]) -> Optional[SimPerson]:
+        if preferred is not None:
+            return preferred
         near = self._people_in_range(SENSE_RADIUS)
         return near[0] if near else None
 
@@ -347,11 +346,10 @@ class SimSubtaskHandler:
             person = self.world.person_by_attribute(attr)
             if person is None or not self._near(self.robot.person_xy(person), SENSE_RADIUS):
                 return self._end(Status.TARGET_NOT_FOUND, None)
-            self.locked[self.cmd_idx] = person
             self.robot.highlight_person(person, True)
             self._face(self.robot.person_xy(person))
             self._say(f"Found a person {attr}.", anchor="robot", hold=1.4)
-            return self._end(Status.EXECUTION_SUCCESS, person.name)
+            return self._finish_find(person)
         return self._run("find_person", body)
 
     def find_person_by_name(self, command) -> Tuple[Status, Any]:
@@ -361,17 +359,16 @@ class SimSubtaskHandler:
             person = self.world.person_by_name(name)
             if person is None or not self._near(self.robot.person_xy(person), SENSE_RADIUS):
                 return self._end(Status.TARGET_NOT_FOUND, None)
-            self.locked[self.cmd_idx] = person
             self.robot.highlight_person(person, True)
             self._face(self.robot.person_xy(person))
             self._say(f"Hello {person.name}.", anchor="robot", hold=1.4)
-            return self._end(Status.EXECUTION_SUCCESS, person.name)
+            return self._finish_find(person)
         return self._run("find_person_by_name", body)
 
     def get_person_info(self, command) -> Tuple[Status, Any]:
         def body():
             info_type = str(_f(command, "info_type", "name"))
-            person = self._target_person()
+            person = self._target_person(self.attended_person)
             if person is None:
                 return self._end(Status.TARGET_NOT_FOUND, None)
             self.robot.highlight_person(person, True)
@@ -386,7 +383,7 @@ class SimSubtaskHandler:
         def body():
             dest = _f(command, "destination", "")
             pose = self.world.pose(dest)
-            person = self._target_person()
+            person = self._target_person(self.attended_person)
             if pose is None or person is None:
                 self.robot.idle(0.5)
                 return self._end(Status.TARGET_NOT_FOUND, None)
@@ -410,7 +407,7 @@ class SimSubtaskHandler:
         def body():
             dest = _f(command, "destination_room", "")
             pose = self.world.pose(dest)
-            person = self._target_person()
+            person = self._target_person(self.attended_person)
             if pose is None or person is None:
                 self.robot.idle(0.5)
                 return self._end(Status.TARGET_NOT_FOUND, None)
@@ -475,7 +472,7 @@ class SimSubtaskHandler:
 
     def answer_question(self, command) -> Tuple[Status, Any]:
         def body():
-            person = self._target_person()
+            person = self._target_person(self.locked.get(self.cmd_idx))
             if person is not None:
                 self.robot.highlight_person(person, True)
                 self._face(self.robot.person_xy(person))

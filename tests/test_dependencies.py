@@ -61,6 +61,9 @@ def _g(place):
 def _random_command(rng):
     kind = rng.choice(["fetch", "count", "describe", "find_tell", "guide", "follow", "here"])
     if kind == "here":  # no leading go_to: starts where the robot is
+        if rng.choice([False, True]):
+            return [{"action": "count", "target_to_count": "people"},
+                    _g("start"), {"action": "say_with_context", "user_instruction": "count"}]
         return [{"action": "find_person", "attribute_value": "waving"},
                 {"action": "get_person_info", "info_type": "name"},
                 _g(rng.choice(PLACES[:-1])),
@@ -186,7 +189,7 @@ def test_every_scenario_with_dependencies_keeps_conflict_order():
                                         kwargs.get("origin_name")), sc["name"]
 
 
-def test_conflict_free_showcases_keep_their_plan():
+def test_showcases_keep_legal_orders_and_correct_attention_conflicts():
     with open(VISUAL) as f:
         visual = json.load(f)
     for sc in visual:
@@ -195,7 +198,11 @@ def test_conflict_free_showcases_keep_their_plan():
         a = merge(commands, origin=origin)
         b = merge(commands, origin=origin, dependencies=False)
         key = lambda p: [(x.source_cmd, x.source_idx) for x in p.actions]  # noqa: E731
-        assert key(a) == key(b), sc["name"]
+        assert conflict_order_preserved(a.actions, commands), sc["name"]
+        if sc["name"] == "showcase_exits":
+            assert not conflict_order_preserved(b.actions, commands)
+        else:
+            assert key(a) == key(b), sc["name"]
 
 
 def _positions(actions):

@@ -89,7 +89,8 @@ def emitted_order(plan, commands, segment_for):
     [(0, 0), (8, 1), (2, 3), (1, 0), (8, 2)],
 ])
 @pytest.mark.parametrize("kappa,weight", [(0, 0), (4, 0), (0, 1), (4, 1)])
-def test_public_merge_minimizes_paper_objective(coords, kappa, weight):
+@pytest.mark.parametrize("interleaved", [None, False, True])
+def test_public_merge_minimizes_paper_objective(coords, kappa, weight, interleaved):
     points = dict(zip(("start", "A", "B", "C", "D"), coords))
     raw = [[], [], []]
     segment_for = {}
@@ -108,9 +109,14 @@ def test_public_merge_minimizes_paper_objective(coords, kappa, weight):
     commands = build_commands(raw)
     plan = merge(commands, locator=points.get, origin=points["start"],
                  navigation_overhead=SPEED * kappa, holding_penalty=weight,
-                 skill_durations_s=DURATION, speed_m_s=SPEED)
+                 skill_durations_s=DURATION, speed_m_s=SPEED, interleaved=interleaved)
     costs = {}
     for order in permutations(range(len(SEGMENTS))):
+        # A split command appears in more than one contiguous run. This
+        # classifies the completed order independently of the DP transition.
+        runs = [c for c, _ in groupby(segment // 2 for segment in order)]
+        if interleaved is not None and (len(runs) > len(set(runs))) != interleaved:
+            continue
         cost = paper_cost(order, points, kappa, weight)
         if cost is not None:
             costs[order] = cost
@@ -119,8 +125,6 @@ def test_public_merge_minimizes_paper_objective(coords, kappa, weight):
     assert costs[actual] == pytest.approx(min(costs.values()))
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="The merger does not yet model the paper's shared person attention.")
 def test_later_find_preserves_earlier_commands_person_attention():
     # Tom lies on the shortest route to Angel's observation site. In the
     # original skill table, finding Tom writes the attention read by command 0.
@@ -136,3 +140,22 @@ def test_later_find_preserves_earlier_commands_person_attention():
     plan = merge(commands, origin=sites["couch"], locator=sites.get)
     skills = [(s.source_cmd, s.action.action) for s in plan.actions if s.action.action != "go_to"]
     assert skills == [(0, "find_person_by_name"), (0, "get_person_info"), (1, "find_person_by_name")]
+
+
+@pytest.mark.parametrize("first,second,conflict", [
+    ({"action": "find_person"}, {"action": "find_person_by_name"}, True),
+    ({"action": "find_person_by_name"}, {"action": "follow_person_until", "destination": "B"}, True),
+    ({"action": "guide_person_to", "destination_room": "A"}, {"action": "find_person"}, True),
+    ({"action": "get_person_info"}, {"action": "get_person_info"}, False),
+    ({"action": "find_person"}, {"action": "count"}, False),
+])
+def test_person_attention_across_locations(first, second, conflict):
+    # Without a conflict the robot should start with command 1, at its own pose.
+    commands = build_commands([
+        [{"action": "go_to", "location_to_go": "A"}, first],
+        [{"action": "go_to", "location_to_go": "B"}, second],
+    ])
+    sites = {"A": (5, 0), "B": (0, 0)}
+    plan = merge(commands, origin=sites["B"], locator=sites.get)
+    owners = [s.source_cmd for s in plan.actions if s.action.action != "go_to"]
+    assert owners == ([0, 1] if conflict else [1, 0])

@@ -1,0 +1,18 @@
+{
+  "description": "395 seconds into a 420-second trial, the robot already holds the cup and has the observation needed for its report. Durations are controlled acceptance-test inputs.",
+  "start": "delivery_site",
+  "home": "instruction_point",
+  "initial_holder": 0,
+  "remaining_s": 25,
+  "commands": [
+    [{"action": "place_object"}],
+    [{"action": "go_to", "location_to_go": "report_site"}, {"action": "say_with_context", "user_instruction": "give the waiting person the result"}]
+  ],
+  "command_names": ["finish delivery", "give report"],
+  "skill_durations_s": {"place_object": 22, "say_with_context": 5},
+  "symmetric_travel_s": [
+    ["delivery_site", "report_site", 4],
+    ["report_site", "instruction_point", 5],
+    ["delivery_site", "instruction_point", 5]
+  ]
+}

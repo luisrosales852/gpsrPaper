@@ -110,7 +110,6 @@ def build_xml(world: World, width: int = 920, height: int = 720) -> str:
         )
 
     # Outer walls.
-    cx, cy = (bx0 + bx1) / 2.0, (by0 + by1) / 2.0
     for nm, rect in (
         ("wall_s", (bx0, by0 - t, bx1, by0)),
         ("wall_n", (bx0, by1, bx1, by1 + t)),
@@ -133,7 +132,7 @@ def build_xml(world: World, width: int = 920, height: int = 720) -> str:
 
     # Robot: the cube placeholder.
     hx, hy, hz = ROBOT_HALF
-    gx, gy, gz = GRIPPER_LOCAL
+    gx, _, gz = GRIPPER_LOCAL
     parts.append(
         f"""
     <body name="robot" pos="0 0 {ROBOT_Z}">

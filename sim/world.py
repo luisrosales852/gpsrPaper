@@ -88,7 +88,7 @@ class World:
         }
 
         self.objects: List[SimObject] = []
-        for i, o in enumerate(self.spec.get("objects", [])):
+        for o in self.spec.get("objects", []):
             self.objects.append(
                 SimObject(
                     name=o["name"],

@@ -67,8 +67,9 @@ python3 bench_holding.py [--latex]                         # travel vs distance 
 ```
 gpsr_merger/           THE CONTRIBUTION — no third-party deps except py_trees in 2 files
   merger.py            interleaving planner; merge() -> InterleavedPlan
-  bt_builder.py        build_tree() -> py_trees root Selector
-  leaf_behaviours.py   ActionLeaf, SequentialFallbackLeaf, OneShotCallbackLeaf
+  bt_builder.py        build_tree() -> ExecutionTree
+  recovery.py          execution phases and recovery policies
+  leaf_behaviours.py   skill dispatch and gripper-aware fallback ordering
   timeouts.py          per-action budgets + GLOBAL_BUDGET_S (420 s)
   status.py            vendored 11-line Status enum
 scenarios/merger.json  62 declarative scheduler scenarios (commands + coords + expect)

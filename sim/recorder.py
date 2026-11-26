@@ -100,7 +100,6 @@ class Recorder:
         return (float(p[0]), float(p[1]), float(p[2]) + dz)
 
     def _hud_state(self) -> dict:
-        cmd = self.current[0] if self.current else 0
         speech_xyz = None
         if self.robot.speech:
             if self.robot.speech_anchor in (None, "robot"):
@@ -160,7 +159,7 @@ class Recorder:
         self.current = key
         self._sites_at_start = {o.name: o.site for o in self.world.objects}
         kind = getattr(plan_action.action, "action", "?")
-        self.leaf_line = f"ActionLeaf({kind})"
+        self.leaf_line = kind
         robot.set_shell_color(cmd_rgba(plan_action.source_cmd))
         x, y = robot.xy
         self.events.append({

@@ -178,12 +178,27 @@ def test_run_completes_without_falling_back():
     assert all(e["branch"] == "interleaved" for e in log["events"])
 
 
-def test_merged_travels_less_than_sequential():
-    m, _, _ = run("merged")
-    s, _, _ = run("sequential")
+def test_exit_aware_plan_travels_less_than_sequential():
+    m, _, _ = run("merged", "showcase_exits")
+    s, _, _ = run("sequential", "showcase_exits")
     assert m["actual_distance_m"] < s["actual_distance_m"], (
         f"merged {m['actual_distance_m']} m !< sequential {s['actual_distance_m']} m")
     assert m["planned_cost_m"] < s["planned_cost_m"]
+
+
+def test_deferred_pose_reacquires_person_after_another_find():
+    sc = {"name": "deferred-person-attention", "origin": World(APARTMENT).locator("couch"),
+          "commands": [
+              [{"action": "go_to", "location_to_go": "couch"},
+               {"action": "find_person_by_name", "name": "Angel"},
+               {"action": "get_person_info", "info_type": "pose"}],
+              [{"action": "go_to", "location_to_go": "living_room"},
+               {"action": "find_person_by_name", "name": "Tom"}],
+          ]}
+    _, log, _ = run("merged", sc, ("0.2:2",), RecoveryPolicy.SKIP_DEFER)
+    successes = [e["result"] for e in _ends(log) if e["kind"] != "go_to"
+                 and e["status"] == "EXECUTION_SUCCESS"]
+    assert successes == ["Angel", "Tom", "Angel", "sitting"]
 
 
 def test_showcase_merge_finishes_sooner():

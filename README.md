@@ -10,7 +10,7 @@ gpsr_merger/          the contribution
   merger.py           interleaving planner (progress-vector DP over go_to-led segments)
   bt_builder.py       builds the py_trees tree from a merged plan
   recovery.py        execution phases, recovery policies, and robot adapter hooks
-  leaf_behaviours.py  handler dispatch and legacy leaves
+  leaf_behaviours.py  handler dispatch and gripper-aware fallback ordering
   timeouts.py         per-action + global time budgets
   status.py           vendored from task_manager/utils/status.py (11-line enum)
 tests/
@@ -65,18 +65,63 @@ Compare completed goals, elapsed time and distance for the same batch and layout
 in `results.json`. This is a pilot with eight batches, two simulated layouts
 and zero injected failures.
 
-The original skill table gives person-finding skills a shared attention write
-and person-info a shared attention read. The merger can find Angel, find Tom for
-another command, then ask for Angel's pose. The simulator answers “sitting”
-from Angel's per-command identity. In an offline replay of the `home2` adapter
-at `5aec4cd14`, with the camera still seeing Tom, the same query returned
-“standing”. The adapter queries the current vision feed by attribute. The
-sequential control returned “sitting” in both. To reproduce the scheduler
-discrepancy, run the strict expected failure as an ordinary assertion:
+Person attention is shared across commands and locations. Either find skill
+selects the person. Person-info, guide and follow consume that selection.
+The merger keeps conflicting segments in issue order. In the two-person
+simulation, it reads Angel's pose before searching for Tom and returns
+“sitting”. With dependencies disabled, it finds Tom before reading the pose
+and returns “standing”. Reports still draw on the issuing command's results.
 
 ```sh
-.venv/bin/python -m pytest --runxfail -q tests/test_paper_objective.py -k person_attention
+.venv/bin/python -m pytest -q tests/test_paper_objective.py tests/test_paper_extensions.py -k person_attention
 ```
+
+### Interleaving bonus and the 25-second endgame
+
+Run both experiments from the repository root with the simulation dependencies installed.
+
+```sh
+.venv/bin/python -m sim.benchmark run scenarios/benchmark_2027.json --bonus-comparison --rates 0 0.2 --repeats 3 --out out/bonus
+.venv/bin/python -m sim.endgame scenarios/endgame_25s.json --remaining 13 14 25 35 36 90 --bins 1 5 --out out/endgame.json
+.venv/bin/python -m pytest -q tests/test_paper_objective.py tests/test_endgame.py
+```
+
+The primary method in the bonus comparison is `merger`, the ordinary
+`merge()` call. It may interleave when that reduces the objective and can
+choose a whole-command order, including the issued order. Back-to-back
+execution provides the sequential reference. The two fixed-bit runs measure
+the effect of restricting the available schedules.
+
+`merge(interleaved=False)` finds the lowest-cost schedule of whole commands
+in any legal order. `merge(interleaved=True)` finds the lowest-cost schedule
+that starts work on another command while one is unfinished. Both use the
+same gripper, attention and dependency constraints. An impossible class raises
+`NoInterleavingSchedule`. The default call optimizes over both classes.
+
+In the bonus benchmark, all three commands arrive together. Each pair runs on
+the same layout with the same per-attempt random seed and recovery policy.
+`bonus_comparisons` gives the additional planned navigation metres and nominal
+travel seconds for interleaving, once per batch and layout. A negative value
+means a saving over the best whole-command order. Both plans execute every
+skill once in the nominal model, so their fixed skill times cancel. Elapsed
+time and distance in the execution rows include the final return. The benchmark
+compares observed successful work, completed goals and savings with the
+issued-order baseline as simulation evidence. Official bonus credit requires
+referee assessment. [GPSR rules, release 2026.2](https://github.com/RoboCupAtHome/RuleBook/blob/2026.2/tasks/GPSR.tex)
+
+`plan_endgame` takes verified remaining actions, the current pose and holder,
+nominal skill and travel times, the instruction point, and the remaining
+budget. It maximizes the number of completed commands and breaks ties by
+earliest return. It can stop and return with unfinished work. The default
+one-second bins and experimental five-second bins round the available budget
+down and each segment cost up. A 9-second report segment and a 5-second
+return fit exactly in 14 seconds. Five-second bins charge 10 + 5 seconds,
+so the same plan first becomes eligible at 15 seconds.
+The fixture begins 395 seconds into the paper's 420-second trial. It assumes
+a verified grasp and an observation already available to report. Its durations
+are controlled inputs. Full-command credit and nominal durations define this
+experiment; partial referee credit and uncertain durations require a scoring
+and timing model.
 
 ## How this was extracted
 
@@ -185,9 +230,8 @@ once. The table measures time and distance before the final return. All 17 actio
 
 Time saved is smaller in relative terms than distance, because perception and
 manipulation take the same time in both orderings. The merger only removes
-driving. `showcase_all_leaves` shows why the scenario matters: its commands are
-already local, so merging saves only ~7–14%. That run exists for leaf coverage, not
-as a demo.
+driving. With shared attention enabled, `showcase_all_leaves` exercises all
+13 skills and drives 56.8 m including return in both orderings.
 
 `out/side_by_side.mp4` shows both runs on one clock, with a Gantt timeline
 coloured by command. The merged bar interleaves colours; the sequential bar is four

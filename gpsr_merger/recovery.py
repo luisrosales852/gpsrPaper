@@ -459,12 +459,17 @@ class ExecutionTree(py_trees.composites.Sequence):
                for dep in self._requirements.by_action[_key(report)].dependencies):
             return None
 
+        # A successful reacquisition supplies fresh attention to the next
+        # observation. Earlier writes still invalidate any *external* input,
+        # such as a person having been moved away from the search location.
+        restored_writes = set()
         for action in actions:
             a_needs = self._requirements.by_action[_key(action)]
-            reads, _, _ = _action_effects(action.action, _norm_location(a_needs.place))
+            reads, writes, _ = _action_effects(action.action, _norm_location(a_needs.place))
             if any(r[0] == w[0] and self._overlap(r[1], w[1])
-                   for r in reads for w in self._writes[failure.write_index:]):
+                   for r in reads - restored_writes for w in self._writes[failure.write_index:]):
                 return None
+            restored_writes.update(writes)
 
         steps = [_goto(needs.place, pa.source_cmd)]
         steps.extend(replace(a, purpose="deferred")

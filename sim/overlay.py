@@ -13,7 +13,7 @@ sequential one.
 
 import math
 import os
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Sequence, Tuple
 
 import matplotlib
 import numpy as np

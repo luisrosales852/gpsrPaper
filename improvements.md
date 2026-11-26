@@ -158,10 +158,10 @@ order stays issue order.
 
 ### How to port it to home2
 
-Copy `leaf_behaviours.py` and `bt_builder.py`. `build_tree`'s signature is
-unchanged; the tree now has one fallback leaf named `fallback` instead of
-`fallback_cmd{i}`. `GPSRTM` already passes `is_completed` (from `_completed`),
-which is what identifies the holder.
+This change now lives in `fallback_order`, which `ExecutionTree` uses during
+recovery. Port the current planner, tree builder, recovery module and dispatch
+helpers together. The older home2 builder still imports its own leaf classes,
+and its direct fallback-leaf test needs to exercise the new tree when ported.
 
 ### Verifying on the robot
 

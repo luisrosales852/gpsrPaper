@@ -1,4 +1,5 @@
 import json
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,6 +14,28 @@ from sim.skill_model import SkillModel, fit_skill_model
 from sim.stochastic import compare
 from sim.world import World
 from tests._merger_helpers import build_commands, make_locator
+
+
+@pytest.mark.parametrize("dependencies,pose", [(True, "sitting"), (False, "standing")])
+def test_person_attention_in_execution(tmp_path, monkeypatch, dependencies, pose):
+    scenario = {
+        "name": "two-person-attention", "origin": World().locator("couch"),
+        "commands": [
+            [go("couch"), {"action": "find_person_by_name", "name": "Angel"},
+             go("side_table"), {"action": "get_person_info", "info_type": "pose"}],
+            [go("living_room"), {"action": "find_person_by_name", "name": "Tom"}],
+        ],
+    }
+    monkeypatch.setattr("sim.run_sim.merge", partial(merge, dependencies=dependencies))
+    args = SimpleNamespace(apartment=Path(HERE)/"apartment.json", width=832, height=720,
+                           fps=30, speed=3, camera="topdown", retries=2, budget=420,
+                           no_video=True, print_tree=False, fail=[])
+    run_once(scenario, "merged", str(tmp_path), args)
+    log = json.loads((tmp_path / "run.json").read_text())
+    skills = [e for e in log["events"] if e["phase"] == "end" and e["kind"] != "go_to"]
+    assert all(e["status"] == "EXECUTION_SUCCESS" for e in skills)
+    expected = ["Angel", pose, "Tom"] if dependencies else ["Angel", "Tom", pose]
+    assert [e["result"] for e in skills] == expected
 
 
 def test_exact_cost_precedes_tie_preference():
