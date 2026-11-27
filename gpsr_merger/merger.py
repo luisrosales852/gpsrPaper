@@ -17,6 +17,7 @@ order that:
   * prices each hop from where the previous segment *ends* (an escort's
     destination) and runs actions before a command's first ``go_to`` at the
     robot's start position (driving back there when ``origin_name`` is given),
+  * optionally prices the final drive back to the instruction point (``return_to``),
   * dedups back-to-back same-location ``go_to`` actions in the final plan.
 
 Pipeline:
@@ -417,6 +418,7 @@ def _optimal_schedule(
     navigation_overhead: float = 0.0,
     greedy: bool = False,
     interleaved: Optional[bool] = None,
+    return_to: Optional[str] = None,
 ) -> List[int]:
     """DP over per-command progress vectors.
 
@@ -427,6 +429,7 @@ def _optimal_schedule(
     Every metre driven while holding an object, on a hop or escorting inside a
     segment, costs ``holding_penalty`` extra.
     Optionally charge a fixed cost for driving to a segment.
+    ``return_to`` prices the drive there after the last segment like a hop.
     """
     M = len(segments)
     if M == 0:
@@ -434,6 +437,9 @@ def _optimal_schedule(
 
     seed, edge = _cost_matrix(segments, distance, has_origin, origin_name)
     cost = _pricer(distance, has_origin)
+    start_place = _ORIGIN if origin_name is None else origin_name
+    back = [cost(seg.exit or (start_place if seg.at_origin else seg.location), return_to)
+            if return_to is not None else 0.0 for seg in segments]
     inside = _carried_inside(segments, cost, _ORIGIN if origin_name is None else origin_name)
     inside_unmoved = _carried_inside(segments, cost, _ORIGIN)
     still = ({u for u, seg in enumerate(segments) if seg.at_origin and seg.exit is None}
@@ -492,13 +498,17 @@ def _optimal_schedule(
             layer = [min(layer, key=f.__getitem__)]
 
     full = tuple(seg_lens)
+    end_weight = 1.0 + holding_penalty * (_gripper_holder(full, holding_after) is not None)
     best = None
     best_cost = INF
     for c in range(n):
         terminal = (full, c, bool(interleaved))
-        total = f.get(terminal, INF)
-        if greedy and terminal not in layer:
+        if terminal not in f or (greedy and terminal not in layer):
             continue
+        ret = back[seg_ids[c][-1]]
+        total, *ties = f[terminal]
+        total = (total + end_weight * ret
+                 + (navigation_overhead if 0 < ret < LARGE_M else 0.0), *ties)
         if total < best_cost:
             best_cost = total
             best = terminal
@@ -542,6 +552,7 @@ def merge(
     initial_holder: Optional[int] = None,
     greedy: bool = False,
     interleaved: Optional[bool] = None,
+    return_to: Optional[str] = None,
 ) -> InterleavedPlan:
     """Merge N parsed commands into one interleaved plan.
 
@@ -571,6 +582,9 @@ def merge(
     greedy selects the cheapest eligible next step for the benchmark baseline.
     interleaved requests the exact minimum with the paper's terminal bit fixed
     to True or False. None uses the ordinary unrestricted objective.
+    ``return_to`` names the instruction point the robot drives back to after
+    the last action; that drive is priced like a hop. It is ignored if
+    ``distance`` cannot reach it.
     """
     if not isfinite(speed_m_s) or speed_m_s <= 0:
         raise ValueError("speed_m_s must be finite and positive")
@@ -588,6 +602,8 @@ def merge(
         distance = _euclidean_distance(loc_fn, origin)
     if origin_name is not None and not _reachable(origin_name, commands, distance, origin is not None):
         origin_name = None
+    if return_to is not None and not _reachable(return_to, commands, distance, origin is not None):
+        return_to = None
     if origin is None and origin_name is not None:
         base = distance
 
@@ -644,6 +660,7 @@ def merge(
             origin_name,
             holding_penalty,
             navigation_overhead=navigation_overhead, greedy=greedy, interleaved=interleaved,
+            return_to=return_to,
         )
 
     actions = _flatten(schedule, flat_segments, commands, origin_name)

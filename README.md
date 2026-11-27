@@ -16,17 +16,17 @@ gpsr_merger/          the contribution
 tests/
   _merger_helpers.py  invariant checkers + scenario harness
 scenarios/
-  merger.json         62 declarative scenarios (commands + coords + expect block)
+  merger.json         64 declarative scenarios (commands + coords + expect block)
 sim/                  MuJoCo visual simulation (see below)
 reference/
   gpsr_task_manager.py   the real ROS node, UNMODIFIED — on-robot wiring reference
-run_scenarios.py      smoke test: runs all 62 scenarios
+run_scenarios.py      smoke test: runs all 64 scenarios
 ```
 
 ## Running
 
 ```bash
-python3 run_scenarios.py       # 62/62 expected
+python3 run_scenarios.py       # 64/64 expected
 python3 run_scenarios.py -v    # also print the merged ordering per scenario
 ```
 
@@ -266,13 +266,13 @@ between two collinear locations and checks that the order changes.
 
 ### Scope of the simulation
 
-Only `showcase_merge`, `showcase_all_leaves` and `showcase_exits` are fully provisioned. The 62 scenarios in
+Only `showcase_merge`, `showcase_all_leaves` and `showcase_exits` are fully provisioned. The 64 scenarios in
 `scenarios/merger.json` are unit tests *for the scheduler*: they reference locations
 like `A`/`loc7` and people like `Jane` that the apartment does not contain, so their
 handlers can report `TARGET_NOT_FOUND`. The executor uses the navigation fallback
 when a drive fails. Some fixtures resolve every `go_to`, but rendering
 the rest meaningfully would mean populating the apartment to match each one.
-`run_scenarios.py` remains the check that matters for the merger itself, and passes 62/62.
+`run_scenarios.py` remains the check that matters for the merger itself, and passes 64/64.
 
 ## Still to write
 

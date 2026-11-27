@@ -6,14 +6,73 @@ Changes made in `gpsrPaper/gpsr_merger/` that are **not yet in
 
 ---
 
+## 10. Count the drive back to the instruction point — 2026-11-26
+
+### What changed and why
+
+The executor always drives back to the instruction point after the last
+command, and the test clock keeps running until it gets there. The DP stopped
+counting at the last segment, so it could pick an order that ends far from
+home when another order ends right next to it. "Bring it to me" and "tell me…"
+steps are parsed as a `go_to` to the start location. Once the return counts,
+they naturally move to the end, on the way home.
+
+`merge(..., return_to=name)` adds the drive from the last segment's exit to
+`name` to each terminal state's cost. It is weighted like any hop: `1 + λ` if
+a command still holds an object, plus `navigation_overhead` when the robot has
+to move. The cost depends only on the terminal state, so the DP stays exact
+(`test_return_is_priced_exactly`, brute force over every feasible order with
+an asymmetric metric). The default `None` keeps today's plans, bit for bit.
+A name `distance` cannot reach is ignored, as with `origin_name`.
+
+`return_to` is separate from `origin_name` on purpose. On a mid-run replan the
+start is the robot's current pose, but home is still the instruction point.
+
+**Ties.** With the return counted, the plan is a closed tour, and under a
+symmetric metric a tour and its reverse cost the same. Ties therefore become
+common and are broken toward issue order. Two single-segment commands always
+tie.
+
+Pinned by the pair `return_not_counted_ends_far_from_home` (A, S, B: the plan
+ends 6 m from home) and `return_groups_delivery_on_the_way_home` (the delivery
+at S moves to the end, 15.71 m against 18 m with the return).
+
+Effect in the sim, previewed in memory (the sim does not pass it yet):
+
+| showcase | travel + return, before | after |
+|---|---|---|
+| `showcase_merge` | 35.14 + 6.20 = 41.34 m | 36.66 + 3.07 = 39.73 m |
+| `showcase_all_leaves` | 29.10 + 6.20 = 35.30 m | 32.23 + 0.00 = 32.23 m |
+| `showcase_exits` | unchanged | unchanged |
+
+The `nominal` and `failed-pick-shared-navigation` recovery-trial plans also
+change, so switching the sim means regenerating the recovery table.
+
+### How to port it to home2
+
+Port `merger.py` and pass `return_to=` the instruction point's map name (the
+same name given as `origin_name`) in `GPSRTM._execute_interleaved_batch`. On a
+replan, pass the instruction point, not the location the robot currently
+stands on.
+
+### Verification
+
+`python3 run_scenarios.py` (64/64) and `python3 -m tests.test_progress_dp`.
+On the robot, use the `return_groups_delivery_on_the_way_home` batch with real
+places. The logged plan must hand the object over last, at the instruction
+point, and the return drive must be empty.
+
+---
+
 ## 9. Price fixed navigation overhead
 
 `navigation_overhead` implements the paper's fixed navigation cost. It
 adds a distance-equivalent cost to each reachable navigation leg with
 positive length in the command plan. A shared stop costs zero extra.
 The option defaults to zero for the runtime benchmark and paired recovery
-trials. The merger ranks travel through the last task. The executor
-handles the return to the instruction point on the shared deadline.
+trials. The merger ranks travel through the last task, unless `return_to`
+is given (§10). The executor handles the return to the instruction point
+on the shared deadline.
 
 ### How to port it to home2
 

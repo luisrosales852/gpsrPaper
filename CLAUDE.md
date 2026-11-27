@@ -30,7 +30,7 @@ Corollaries:
 ## Commands
 
 ```bash
-python3 run_scenarios.py          # merger smoke test — expect 62/62
+python3 run_scenarios.py          # merger smoke test — expect 64/64
 python3 run_scenarios.py -v       # also print the merged ordering per scenario
 
 # Simulation (needs the venv; Python 3.14)
@@ -72,7 +72,7 @@ gpsr_merger/           THE CONTRIBUTION — no third-party deps except py_trees 
   leaf_behaviours.py   skill dispatch and gripper-aware fallback ordering
   timeouts.py          per-action budgets + GLOBAL_BUDGET_S (420 s)
   status.py            vendored 11-line Status enum
-scenarios/merger.json  62 declarative scheduler scenarios (commands + coords + expect)
+scenarios/merger.json  64 declarative scheduler scenarios (commands + coords + expect)
 tests/_merger_helpers.py  invariant checkers, BAML stand-in builder, expect-evaluator
 tests/test_sim_run.py     17 tests on real headless sim runs (incl. collision checks)
 tests/test_progress_dp.py differential test: progress-vector DP vs tests/_heldkarp_oracle.py
@@ -153,6 +153,19 @@ Things that will bite you:
   (`..._counts_escorts_while_holding` fails if only hops count);
   `bench_holding.py` gives the trade-off (λ=1: carried 6.49 m vs 8.04 at λ=0 and
   6.22 sequential, travel +2.9%). κ and τ are not modelled (`futureWork.md`).
+- **`return_to` (default None = off).** Names the instruction point the robot
+  drives back to after the last action. `_optimal_schedule` adds that drive to
+  each terminal state's cost (`back[u]` from the last segment's exit, weighted
+  `1 + λ` if a command still holds, plus `navigation_overhead`). Still exact:
+  it depends only on the terminal state. Off, plans are bit-identical to
+  before. It is separate from `origin_name` on purpose: on a mid-run replan the
+  start is the current pose, but home is still the instruction point. An
+  unreachable name is ignored (`_reachable`). With it on, a route and its
+  reverse cost the same (symmetric metric), so ties are common and go to issue
+  order. Assert with `action_before`, not `go_to_order`. `planned_travel(...,
+  return_to=)` re-derives it. `test_return_is_priced_exactly` checks it by
+  brute force, and the `return_*` scenario pair pins "bring it to me" moving to
+  the end. The sim does not pass it yet (`improvements.md` §10).
 - **`distance=` is the only metric hook.** `merge(..., distance=fn)` replaces
   `_euclidean`. It takes location **names**, `fn(from_name | None, to_name)`, where
   `None` is the robot origin (only asked when `origin` is not None) — the same
@@ -265,7 +278,7 @@ people (a kind missing there is assumed to touch no shared state).
 
 ## Scope limits worth remembering
 
-- Only `showcase_merge`, `showcase_all_leaves` and `showcase_exits` are fully provisioned in the apartment. The 62
+- Only `showcase_merge`, `showcase_all_leaves` and `showcase_exits` are fully provisioned in the apartment. The 64
   scenarios in `scenarios/merger.json` are unit tests *for the scheduler*; they
   reference locations like `A`/`loc7` and people like `Jane` that do not exist in
   the apartment, so their perception leaves correctly report `TARGET_NOT_FOUND`.

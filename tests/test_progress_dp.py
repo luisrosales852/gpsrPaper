@@ -248,6 +248,36 @@ def test_holding_penalty_is_exact():
     assert changed > 0  # the penalty does change some plans
 
 
+def test_return_is_priced_exactly():
+    """With return_to, the merged plan is the best feasible order counting the
+    drive back, weighted like a hop (holding penalty, navigation overhead)."""
+    rng = random.Random(SEED + 6)
+    changed = 0
+    for _ in range(300):
+        cmds_json = _named_start_batch(rng)
+        if cmds_json[0][-1]["action"] == "place_object" and rng.random() < 0.3:
+            cmds_json[0].pop()  # command 0 drives home holding
+        coords = {name: [rng.uniform(0, 12), rng.uniform(0, 8)] for name in [*LOCS, "S"]}
+        pose = (coords["S"][0] + rng.uniform(-1.5, 1.5), coords["S"][1] + rng.uniform(-1.5, 1.5))
+        distance = _asymmetric(coords, pose)
+        penalty, overhead = rng.choice([0.0, 0.5]), rng.choice([0.0, 2.0])
+        commands = build_commands(cmds_json)
+        flat, seg_ids, holding_after = _prepare(commands)
+
+        def cost(actions):
+            return planned_travel(actions, commands, distance, True, "S", penalty,
+                                  navigation_overhead=overhead, return_to="S")
+
+        best = min(cost(_flatten(s, flat, commands, "S"))
+                   for s in _feasible_schedules(flat, seg_ids, holding_after))
+        kw = dict(origin=pose, distance=distance, dependencies=False, origin_name="S",
+                  holding_penalty=penalty, navigation_overhead=overhead)
+        plan = merge(commands, return_to="S", **kw)
+        assert cost(plan.actions) <= best + 1e-6, (cost(plan.actions), best, cmds_json)
+        changed += cost(merge(commands, **kw).actions) > best + 1e-6
+    assert changed > 0  # counting the return does change some plans
+
+
 def test_navigation_overhead_matches_brute_force():
     rng = random.Random(SEED + 5)
     changed = 0

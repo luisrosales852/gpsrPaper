@@ -4683,5 +4683,144 @@
         ]
       ]
     }
+  },
+  {
+    "name": "return_not_counted_ends_far_from_home",
+    "description": "'Bring me the cup' (deliver at the start S) plus a count at B. Without return_to the planner stops at the last segment: A, S, B (12 m) beats ending at S (15.71 m), and the robot finishes 6 m from home.",
+    "commands": [
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "A"
+        },
+        {
+          "action": "pick_object",
+          "object_to_pick": "cup"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "S"
+        },
+        {
+          "action": "give_object"
+        }
+      ],
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "B"
+        },
+        {
+          "action": "count",
+          "target_to_count": "cups"
+        }
+      ]
+    ],
+    "coords": {
+      "S": [
+        0,
+        0
+      ],
+      "A": [
+        3,
+        0
+      ],
+      "B": [
+        0,
+        6
+      ]
+    },
+    "origin": [
+      0,
+      0
+    ],
+    "origin_name": "S",
+    "expect": {
+      "per_command_order": true,
+      "non_goto_preserved": true,
+      "gripper_invariant": true,
+      "action_before": [
+        [
+          [
+            0,
+            3
+          ],
+          [
+            1,
+            1
+          ]
+        ]
+      ]
+    }
+  },
+  {
+    "name": "return_groups_delivery_on_the_way_home",
+    "description": "Same batch with return_to S: A, S, B now costs 18 m with the drive back, so the delivery to the operator moves to the end (15.71 m). Either direction of that tour ties.",
+    "commands": [
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "A"
+        },
+        {
+          "action": "pick_object",
+          "object_to_pick": "cup"
+        },
+        {
+          "action": "go_to",
+          "location_to_go": "S"
+        },
+        {
+          "action": "give_object"
+        }
+      ],
+      [
+        {
+          "action": "go_to",
+          "location_to_go": "B"
+        },
+        {
+          "action": "count",
+          "target_to_count": "cups"
+        }
+      ]
+    ],
+    "coords": {
+      "S": [
+        0,
+        0
+      ],
+      "A": [
+        3,
+        0
+      ],
+      "B": [
+        0,
+        6
+      ]
+    },
+    "origin": [
+      0,
+      0
+    ],
+    "origin_name": "S",
+    "return_to": "S",
+    "expect": {
+      "per_command_order": true,
+      "non_goto_preserved": true,
+      "gripper_invariant": true,
+      "action_before": [
+        [
+          [
+            1,
+            1
+          ],
+          [
+            0,
+            3
+          ]
+        ]
+      ]
+    }
   }
 ]
